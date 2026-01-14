@@ -1,0 +1,12 @@
+# Node.js (for client and server)
+node_modules/
+.env
+dist/
+build/
+.DS_Store
+
+# Python (for ml-service)
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
