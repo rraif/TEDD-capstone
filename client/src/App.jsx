@@ -1,42 +1,27 @@
-import './App.css'
-import teddLogo from './assets/tedd.png' 
-import googleIcon from './assets/google.svg' 
+// client/src/App.jsx
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './Login'; // Import the file you just created
+import Inbox from './Inbox'; // Import the inbox we made earlier
 
 function App() {
-  //handles redirect (this button takes to website)
-  const handleLogin = () => {
-    window.location.href = 'http://localhost:5000/auth/google'
-  };
-
   return (
-    <div className='split-screen-container'>
-      {/*LEFT SIDE: TEDD LOGO*/}
-      <div className='left-panel'>
-        <div className='brand-wrapper'>
-          {/*USE TEDD IMAGE*/}
-          <img src ={teddLogo} alt  = "TEDD Logo" className='brand-logo-img'/>
-
-          <p className='tagline'>The Email Dangers Detector</p>
-        </div>
-      </div>
-
-    {/*RIGHT SIDE: Login*/}
-      <div className='right-panel'>
-        <div className='login-card'>
-          <h2 className='login-header'>Login</h2>
-
-          <button className='navy-google-btn' onClick={handleLogin}>
-            <div className='icon-wrapper'>
-             {/* USE GOOGLE IMAGE */}
-             <img src={googleIcon} alt="G" className='google-icon' />
-            </div>
-            <span className='btn-next'>Login with Google</span>
-          </button>
-  
-        </div>
-      </div>
-    </div>
-  )
+    <BrowserRouter>
+      <Routes>
+        {/* Default to Login */}
+        <Route path="/" element={<Login />} />
+        
+        {/* Explicit Login Route */}
+        <Route path="/login" element={<Login />} />
+        
+        {/* The Inbox Route (Where the backend sends you) */}
+        <Route path="/inbox" element={<Inbox />} />
+        
+        {/* Catch-all: If user types random junk, go to Login */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
 
-export default App
+export default App;
