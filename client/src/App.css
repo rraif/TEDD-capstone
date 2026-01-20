@@ -1,0 +1,119 @@
+/* --- CONTAINER --- */
+.split-screen-container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden; /* Prevents scrolling */
+  background-color: #ffffff;
+}
+
+/* --- LEFT SIDE (TEDD Logo) --- */
+.left-panel {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end; /* Pushes content right, against the line */
+  align-items: center;
+  
+  /* Reduced padding so the logo sits closer to the line */
+  padding-right: 60px;
+  
+  /* The vertical divider line */
+  border-right: 3px solid #b0b0b0; 
+}
+
+.brand-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end; /* Aligns the image and text to the right */
+}
+
+.brand-logo-img {
+  /* BIGGER SIZE to match your target image */
+  width: 480px; 
+  max-width: 100%;
+  height: auto;
+  margin-bottom: 10px;
+}
+
+.tagline {
+  font-family: sans-serif;
+  /* Larger font to match the large logo */
+  font-size: 1.8rem;
+  color: #1a237e; /* Navy Blue */
+  font-style: italic;
+  font-weight: 600;
+  margin: 0;
+  padding-right: 10px; /* Slight alignment tweak */
+}
+
+/* --- RIGHT SIDE (Login) --- */
+.right-panel {
+  flex: 1;
+  display: flex;
+  justify-content: flex-start; /* Pushes content left, against the line */
+  align-items: center;
+  
+  /* Reduced padding so the card sits closer to the line */
+  padding-left: 60px;
+}
+
+/* --- LOGIN CARD --- */
+.login-card {
+  border: 2px solid #1a237e;
+  border-radius: 12px;
+  
+  /* Large dimensions to match target */
+  width: 500px; 
+  padding: 80px 60px; 
+  
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: white;
+}
+
+.login-header {
+  color: #1a237e;
+  font-size: 2.5rem;
+  margin: 0 0 3rem 0; /* Spacing below 'Login' text */
+  font-weight: 500;
+}
+
+/* --- GOOGLE BUTTON --- */
+.navy-google-btn {
+  background-color: #1a237e;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  
+  width: 100%;
+  padding: 15px 0; /* Taller button */
+  
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.navy-google-btn:hover {
+  opacity: 0.9;
+}
+
+.icon-wrapper {
+  background-color: white;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.google-icon {
+  width: 18px;
+  height: 18px;
+}

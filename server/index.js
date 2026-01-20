@@ -1,81 +1,144 @@
 //load tools (dotenv, express, googleapis)
 require('dotenv').config(); //opens .env file
 const express = require('express'); //loads expressjs
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
+const cors = require('cors');
 const {google} = require('googleapis'); //google
 
 const app = express(); //start server app
+const PORT = 5000;
 
+//middleware setup
+//allow react to send cookies
+app.use(cors({
+    origin: 'http://localhost:5173',
+    credentials: true
+}));
 
-//we prepare our google IDs to show to google later
-const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    'http://localhost:5000/auth/google/callback'//where we go if google accepts
-);
+app.use(express.json())
 
-//when the user goes to localhost
-app.get('/auth/google', (req, res) => {
+//this session config currently uses ram, will change after adding postgres
+app.use(session({
+    secret:process.env.SESSION_SECRET,
+    resave:false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false, //set to true if deploy to https
+        maxAge: 24 * 60 * 60 * 1000 //24 hours
+    }
+}));
 
-    //make a list of permissions
-    const scopes = [
-    'https://www.googleapis.com/auth/gmail.readonly', // "I want to READ emails"
-    'https://www.googleapis.com/auth/userinfo.email',  // "I want to know your email address"
-    'https://www.googleapis.com/auth/userinfo.profile', 
-    'openid'  
-  ];
+//init passport
+app.use(passport.initialize());
+app.use(passport.session());
 
-    //create special google url
-    const url = oauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: scopes,
+//passport strategy
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: 'http://localhost:5000/auth/google/callback'//where we go if google accepts
+},
+(accessToken, refreshToken, profile, done) => {
+    const user = {
+        googleId: profile.id,
+        email: profile.emails[0].value,
+        name: profile.displayName,
+        tokens: {
+            access_token: accessToken,
+            refresh_token: refreshToken
+        }
+    };
+
+    //for future use when postgres 
+    return done(null,user);
+}));
+
+//what goes into the cookie
+passport.serializeUser((user, done) => {
+    done(null, user);
+});
+
+//unpack the cookie on every request
+passport.deserializeUser((user, done) => {
+    done(null, user);
+});
+
+//login trigger
+app.get('/auth/google', 
+    passport.authenticate('google', {
+        scope: ['https://www.googleapis.com/auth/gmail.readonly', 'email',  'profile', 'openid' ],
+        accessType: 'offline',
         prompt: 'consent'
     })
+);
 
-    //redirect user to the google url
-    res.redirect(url);
+//when the user goes to localhost/auth/google
+app.get('/auth/google/callback', 
+    passport.authenticate('google', {
+        failureRedirect: 'http://localhost:5173/login?error=true'
+    }),
+    (req, res) => {
+    //redirect user to the dashboard
+    res.redirect('http://localhost:5173/inbox');
 });
 
-app.get('/auth/google/callback', async (req, res) => {
-    //grab the ticket from the URL (?)
-    const {code} = req.query;
+//check if user is logged in
+app.get('/api/current_user', (req, res) => {
+    res.send(req.user || null);
+});
 
-    //swap ticket for real tokens
-    try{
-    const{tokens} = await oauth2Client.getToken(code)
+//logout
+app.get('/logout', (req, res, next) => {
+    req.logout((err) => {
+        if (err) return next(err);
+        res.redirect('http://localhost:5173');
+    });
+});
 
-    //make us able touse tokens
-    oauth2Client.setCredentials(tokens)
-
-    const hasEmailScope = tokens.scope.includes('gmail.readonly');
-
-    if (!hasEmailScope) {
-      return res.send(`
-        <h1>Access Denied</h1>
-        <p>We cannot work without permission to read your emails.</p>
-        <p>Please <a href="/auth/google">try again</a> and make sure to check the box!</p>
-      `);
+//protected api (emails)
+app.get('/api/emails', async (req, res) =>{
+    //is user logged in?
+    if(!req.isAuthenticated() || !req.user.tokens) {
+        return res.status(401).json({error: 'Unauthorized'});
     }
 
-    //ask gmail for the latest email
-    const gmail = google.gmail({version:'v1', auth:oauth2Client});
+    try {
+        const{access_token, refresh_token } = req.user.tokens;
 
-    const response = await gmail.users.messages.list({
-        userId:'me',
-        maxResults:1
-    });
+        //prevent user from seeing another's emails
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_CALLBACK_URL,
+        );
 
-    //display data on the screen
-    res.send(response.data);
+        //load tokens
+        oauth2Client.setCredentials({
+            access_token: access_token,
+            refresh_token: refresh_token
+        });
 
-}catch (error){
-    console.error(error);
-    res.status(500).send('Authentication Failed');
-}
+        //fetch emails
+        const gmail = google.gmail({version: 'v1', auth: oauth2Client});
+
+        const response = await gmail.users.messages.list({
+            userId:'me',
+            maxResults: 10
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Gmail API Error:', error);
+        //tell frontend to login again if token isnt valid
+        res.status(401).json({error: 'Token expired or invalid', details: error.message});
+    }
 });
 
-//turn on the server
-app.listen(5000, () => {
-    console.log('Server is running on http://localhost:5000');
-})
+app.listen(PORT, () => {
+    console.log('Server running on http://localhost:${PORT}')
+});
+
 
 
