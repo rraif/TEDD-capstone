@@ -1,0 +1,24 @@
+/* client/src/index.css */
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+/* THE FIX: Force the root container to fill the screen */
+#root {
+  max-width: none; /* Vite sets this to 1280px by default - we want NO limit */
+  margin: 0;       /* Vite sets this to '0 auto' - we don't want centering */
+  padding: 0;      /* Remove default padding */
+  width: 100%;
+  height: 100%;
+  text-align: left; /* Vite centers text by default - reset it */
+}
+
+body {
+  margin: 0;
+  display: block; /* Vite sometimes sets this to flex/place-items-center */
+  min-width: 320px;
+  min-height: 100vh;
+}

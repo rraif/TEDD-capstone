@@ -1,0 +1,141 @@
+/* client/src/App.css */
+
+/* --- RESET & BASE --- */
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #ffffff;
+}
+
+/* --- LAYOUT CONTAINER --- */
+.split-screen-container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  align-items: center;
+}
+
+/* --- LEFT SIDE (TEDD Logo) --- */
+.left-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center; 
+  align-items: flex-end; 
+  /* Reduced padding slightly to allow the LOGO to get bigger 
+     without getting pushed to the left wall */
+  padding-right: 80px; 
+  position: relative;
+}
+
+/* The Vertical Divider Line */
+.left-panel::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 5%;        /* Taller line */
+  height: 100%;    
+  width: 3px;     
+  background-color: #d1d5db; 
+}
+
+.brand-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center; 
+  text-align: center;
+}
+
+.brand-logo-img {
+  width: 650px; 
+  max-width: 90%; 
+  height: auto;
+  /* CHANGED: Removed bottom margin so text can sit flush */
+  margin-bottom: 0px; 
+  object-fit: contain;
+  /* FORCE: Prevents logo from shrinking if window height is small */
+  flex-shrink: 0;
+}
+
+.tagline {
+  font-family: sans-serif;
+  font-size: 1.8rem;
+  color: #1a237e;
+  font-style: italic;
+  font-weight: 600;
+  
+  /* CHANGED: Negative margin pulls it UP over any whitespace in the image */
+  margin-top: -20px; 
+  
+  /* FORCE: Prevents text from shrinking */
+  flex-shrink: 0;
+}
+
+/* --- RIGHT SIDE (Login Form) --- */
+.right-panel {
+  flex: 1;
+  display: flex;
+  justify-content: flex-start; 
+  align-items: center;
+  /* Matching the left side padding */
+  padding-left: 80px; 
+}
+
+/* --- LOGIN CARD --- */
+.login-card {
+  border: 3px solid #1a237e; 
+  border-radius: 16px;
+  
+  /* WIDER AND TALLER */
+  width: 600px; 
+  padding: 140px 60px; /* Huge vertical padding to fill screen height */
+  
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: white;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.08); 
+}
+
+.login-header {
+  color: #1a237e;
+  font-size: 4rem; /* Massive Header */
+  margin: 0 0 4rem 0; /* More space below header */
+  font-weight: 600;
+}
+
+/* --- GOOGLE BUTTON --- */
+.navy-google-btn {
+  background-color: #1a237e;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  width: 100%;
+  padding: 24px 0; /* Very chunky button */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  
+  /* Larger button text */
+  font-size: 1.5rem; 
+  font-weight: 500;
+  
+  transition: opacity 0.2s;
+}
+
+.navy-google-btn:hover {
+  opacity: 0.9;
+}
+
+.icon-wrapper {
+  display: flex;
+  align-items: center;
+  margin-right: 20px;
+}
+
+.google-icon {
+  /* CHANGED: Increased from 18px to 32px */
+  width: 48px;
+  height: 48px;
+}
