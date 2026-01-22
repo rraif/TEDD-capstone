@@ -98,6 +98,7 @@ app.get('/logout', (req, res, next) => {
 });
 
 //protected api (emails)
+//to do RAIF: put input sanitization
 app.get('/api/emails', async (req, res) =>{
     //is user logged in?
     if(!req.isAuthenticated() || !req.user.tokens) {
@@ -115,20 +116,52 @@ app.get('/api/emails', async (req, res) =>{
         );
 
         //load tokens
-        oauth2Client.setCredentials({
-            access_token: access_token,
-            refresh_token: refresh_token
-        });
+        oauth2Client.setCredentials({access_token, refresh_token});
 
         //fetch emails
         const gmail = google.gmail({version: 'v1', auth: oauth2Client});
 
-        const response = await gmail.users.messages.list({
+        //get email IDs
+        const listResponse = await gmail.users.messages.list({
             userId:'me',
-            maxResults: 10
+            maxResults: 10 //grabs top 10 emails
         });
 
-        res.json(response.data);
+        const messages = listResponse.data.messages;
+
+        if (!messages || messages.length === 0) {
+            return res.json([]);
+        }
+
+        //fetch details for each email id (promise.all does this in parallel)
+        const emailDetails = await Promise.all(
+            messages.map(async (msg) => {
+                const detail = await gmail.users.messages.get({
+                    userId: 'me',
+                    id: msg.id,
+                    format: 'full' //everything in email
+                });
+            
+                //cleanup data
+                const headers = detail.data.payload.headers;
+                const subject = headers.find(h => h.name === 'Subject')?.value || '(No Subject)';
+                const from = headers.find(h => h.name === 'From')?.value || '(Unknown)';
+                const date = headers.find(h => h.name === 'Date')?.value;
+
+                return{
+                    id: msg.id,
+                    threadId: msg.threadId,
+                    subject: subject,
+                    from: from,
+                    date: date,
+                    snippet: detail.data.snippet //just gets the first several characters from the email content
+                };
+            })
+        );
+
+        //send clean list to frontend
+        res.json(emailDetails);
+
     } catch (error) {
         console.error('Gmail API Error:', error);
         //tell frontend to login again if token isnt valid
@@ -137,7 +170,7 @@ app.get('/api/emails', async (req, res) =>{
 });
 
 app.listen(PORT, () => {
-    console.log('Server running on http://localhost:${PORT}')
+    console.log(`Server running on http://localhost:${PORT}`)
 });
 
 
