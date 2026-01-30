@@ -2,6 +2,8 @@
 and loads it into process.env, which is in memory */
 require('dotenv').config(); 
 
+const db = require('./database.js')
+
 /* this contains standard web server features for nodejs so we
 don't have to set it up ourselves, we just decide what we want
 it to do */
@@ -16,6 +18,8 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 /* creates sessions and session ID for users to remember them */
 const session = require('express-session');
 
+const pgSession = require('connect-pg-simple')(session);
+
 /* backend is port 5000, frontend is port 5173, this basically allows
 frontend to talk to backend despite having different ports */
 const cors = require('cors');
@@ -24,8 +28,6 @@ const cors = require('cors');
 const {google} = require('googleapis'); 
 
 const DOMPurify = require('isomorphic-dompurify')
-
-
 
 /* this creates the server instance */
 const app = express(); 
@@ -47,9 +49,12 @@ app.use(cors({
 (this part is not used yet, but will be for something like "mark as unsafe" feature) */
 app.use(express.json())
 
-//this session config currently uses ram, will change after adding postgres
 /* this snippet decides how cookies work for our web app */
 app.use(session({
+    store: new pgSession({
+        pool: db.pool,
+        tableName: 'session'
+    }),
     secret:process.env.SESSION_SECRET, // if a cookie doesn't have our session secret, it's invalid
     resave:false, // our web app won't rewrite a user's data if nothings changed
     saveUninitialized: false, // our web app won't remember people who don't login
@@ -58,7 +63,6 @@ app.use(session({
         maxAge: 24 * 60 * 60 * 1000  // cookie valid for 24 hours
     }
 }));
-
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -70,19 +74,46 @@ passport.use(new GoogleStrategy({
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: 'http://localhost:5000/auth/google/callback' //passport tells the user to go to this address after going to Google
 },
-(accessToken, refreshToken, profile, done) => {
-    const user = {
-        googleId: profile.id,
-        email: profile.emails[0].value,
-        name: profile.displayName,
-        tokens: {
-            access_token: accessToken, //lets us open users gmails (expires every 60 min)
-            refresh_token: refreshToken //used to refresh access token
-        }
+
+//after the user logs in, we receive their google data
+async (accessToken, refreshToken, profile, done) => {
+
+    //we ask the database to get a specific user with a specific google id
+    try{
+    const result = await db.query(
+        'SELECT * FROM users WHERE google_id = $1',
+        [profile.id]
+    );
+
+    //eh?
+    let user;
+
+    //if the database returns a result, it means the user exists
+    if (result.rows.length > 0){
+        user = result.rows[0];
+
+    //if it doesn't, then it creates this user as a new user
+    } else {
+        const insertResult = await db.query(
+            `INSERT INTO users (google_id, email, display_name)
+            VALUES ($1, $2, $3)
+            RETURNING *`,
+            [profile.id, profile.emails[0].value, profile.displayName]
+        );
+        user = insertResult.rows[0];
+    }
+
+    user.tokens = {
+        access_token: accessToken,
+        refresh_token: refreshToken
     };
-    //done function given by passport to signal... it's done
-    //null means there's no errors and then we hand over the user object to passport
-    return done(null,user);
+
+    return done(null, user);
+
+    } catch (err) {
+        console.error('database auth error: ', err);
+        return done(err,null);
+}
 }));
 
 //covnerts heavy user data into a ticket and stores it in the browser
