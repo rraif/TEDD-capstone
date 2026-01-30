@@ -11,3 +11,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+.agents/
+server/.agents/
+server/.github/skills/
+

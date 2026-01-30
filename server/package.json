@@ -17,8 +17,9 @@
     "express": "^5.2.1",
     "express-session": "^1.18.2",
     "googleapis": "^170.1.0",
+    "isomorphic-dompurify": "^2.35.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "pg": "^8.17.1"
+    "pg": "^8.17.2"
   }
 }
