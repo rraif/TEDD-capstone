@@ -28,6 +28,7 @@ const cors = require('cors');
 const {google} = require('googleapis'); 
 
 const DOMPurify = require('isomorphic-dompurify')
+const {encrypt, decrypt} = require('./crypto.js')
 
 /* this creates the server instance */
 const app = express(); 
@@ -60,7 +61,7 @@ app.use(session({
     saveUninitialized: false, // our web app won't remember people who don't login
     cookie: {
         secure: false,  // false for http, true for https
-        maxAge: 24 * 60 * 60 * 1000  // cookie valid for 24 hours
+        maxAge: 24 * 60 * 60 * 1000  // cookzie valid for 24 hours
     }
 }));
 
@@ -85,7 +86,6 @@ async (accessToken, refreshToken, profile, done) => {
         [profile.id]
     );
 
-    //eh?
     let user;
 
     //if the database returns a result, it means the user exists
@@ -103,10 +103,9 @@ async (accessToken, refreshToken, profile, done) => {
         user = insertResult.rows[0];
     }
 
-    user.tokens = {
-        access_token: accessToken,
-        refresh_token: refreshToken
-    };
+    if (refreshToken) {
+        user.encryptedRefreshToken = encrypt(refreshToken);
+    }
 
     return done(null, user);
 
@@ -118,11 +117,21 @@ async (accessToken, refreshToken, profile, done) => {
 
 //covnerts heavy user data into a ticket and stores it in the browser
 passport.serializeUser((user, done) => {
-    done(null, user);
+    const sessionUser = {
+        id: user.id,
+        google_id: user.google_id,
+        encryptedRefreshToken: user.encryptedRefreshToken
+    };
+    done(null, sessionUser);
 });
 
 //you give the ticket to get that heavy data back, which was stored in the server
-passport.deserializeUser((user, done) => {
+passport.deserializeUser((sessionUser, done) => {
+    const user = {...sessionUser};
+
+    if(user.encryptedRefreshToken){
+        user.refreshToken = decrypt(user.encryptedRefreshToken);
+    }
     done(null, user);
 });
 
@@ -169,16 +178,12 @@ async just basically means this is a function that might take a while*/
 app.get('/api/emails', async (req, res) =>{
 
     //check if user is not logged in or if the user is missing tokens
-    if(!req.isAuthenticated() || !req.user.tokens) {
+    if(!req.isAuthenticated() || !req.user.refreshToken) {
         return res.status(401).json({error: 'Unauthorized'});
     }
 
     //if the user is valid,
     try {
-        //get access token and refresh token from user tokens
-        const{access_token, refresh_token } = req.user.tokens;
-
-
         //create a new instance of the oauth 2 client with our credentials
         //to let google know its us
         const oauth2Client = new google.auth.OAuth2(
@@ -189,7 +194,9 @@ app.get('/api/emails', async (req, res) =>{
 
 
         //load our keys into the client to identify the user
-        oauth2Client.setCredentials({access_token, refresh_token});
+        oauth2Client.setCredentials({
+            refresh_token: req.user.refreshToken
+        });
 
 
         //create a gmail object
