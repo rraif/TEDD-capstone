@@ -10,6 +10,17 @@ don't have to set it up ourselves, we just decide what we want
 it to do */
 const express = require('express'); 
 
+const helmet = require('helmet');
+
+const rateLimit = require('express-rate-limit');
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 100, //100 requests per 15 mins for each ip
+    standardHeaders: true, 
+    legacyHeaders: false,
+    message: "Too many requests, try again later"
+});
+
 /* the thing that checks your id */
 const passport = require('passport');
 
@@ -34,6 +45,13 @@ const {encrypt, decrypt} = require('./crypto.js')
 /* this creates the server instance */
 const app = express(); 
 const PORT = 5000;
+
+//use helmet quite literally just "adds security"
+app.use(helmet({
+    contentSecurityPolicy: false,
+}));
+
+app.use(limiter);
 
 /* our backend is port 5000, the snippet below
 allows requests from port 5173 (react) to be accepted
