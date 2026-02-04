@@ -13,10 +13,12 @@ COPY package*.json ./
 RUN npm install
 
 # Copy the rest of the backend code
-COPY . .
+COPY --chown=node:node . .
 
 # Expose the port the server runs on
 EXPOSE 5000
+
+USER node
 
 # Start the server using nodemon (if you have it) or just node
 CMD ["node", "index.js"]
