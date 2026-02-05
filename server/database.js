@@ -4,9 +4,7 @@ const { Pool } = require('pg');
  and fetch data to send to client*/ 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl:{
-        rejectUnauthorized: false
-    }
+    ssl: {rejectUnauthorized: true}
 });
 
 /* other files communicate what to get from the database

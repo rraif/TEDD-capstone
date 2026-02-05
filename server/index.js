@@ -1,6 +1,7 @@
 /* this takes the .env file, which contains our secret stuff
 and loads it into process.env, which is in memory */
-require('dotenv').config(); 
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const db = require('./database.js')
 
