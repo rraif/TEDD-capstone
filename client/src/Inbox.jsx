@@ -5,8 +5,8 @@ function Inbox() {
   const [emails, setEmails] = useState(null);
 
   useEffect(() => {
-    // Fetch the emails from your new Backend API
-    fetch('http://localhost:5000/api/emails', {
+    const apiURL = import.meta.env.VITE_API_URL;
+    fetch(`${apiURL}/api/emails`, {
       credentials: 'include' // IMPORTANT: This sends the Session Cookie!
     })
     .then(res => res.json())

@@ -6,10 +6,11 @@ services:
     build: ./server
     container_name: tedd-server
     ports:
-      - "5000:5000"
+      - "${PORT}:${PORT}"
     environment:
       DATABASE_URL: ${DATABASE_URL} 
-      
+      PORT: ${PORT}
+      CLIENT_URL: ${CLIENT_URL}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
@@ -26,7 +27,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      VITE_API_URL: http://localhost:5000
+      VITE_API_URL: ${VITE_API_URL}
     depends_on:
       - server
     volumes:
