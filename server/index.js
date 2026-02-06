@@ -1,15 +1,8 @@
-/* this takes the .env file, which contains our secret stuff
-and loads it into process.env, which is in memory */
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const db = require('./database.js')
-
-/* this contains standard web server features for nodejs so we
-don't have to set it up ourselves, we just decide what we want
-it to do */
 const express = require('express'); 
-
 const helmet = require('helmet');
 
 const rateLimit = require('express-rate-limit');
@@ -21,30 +14,18 @@ const limiter = rateLimit({
     message: "Too many requests, try again later"
 });
 
-/* the thing that checks your id */
 const passport = require('passport');
-
-/* the thing that lets passport know how to check google IDs */
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-
-/* creates sessions and session ID for users to remember them */
 const session = require('express-session');
-
 const pgSession = require('connect-pg-simple')(session);
-
-/* backend is port 5000, frontend is port 5173, this basically allows
-frontend to talk to backend despite having different ports */
 const cors = require('cors');
-
-/* we get google stuff */
 const {google} = require('googleapis'); 
+const DOMPurify = require('isomorphic-dompurify');
+const {encrypt, decrypt} = require('./crypto.js');
 
-const DOMPurify = require('isomorphic-dompurify')
-const {encrypt, decrypt} = require('./crypto.js')
-
-/* this creates the server instance */
 const app = express(); 
-const PORT = 5000;
+const PORT = process.env.PORT;
+const CLIENT_URL = process.env.CLIENT_URL;
 
 //use helmet quite literally just "adds security"
 app.use(helmet({
@@ -53,15 +34,8 @@ app.use(helmet({
 
 app.use(limiter);
 
-/* our backend is port 5000, the snippet below
-allows requests from port 5173 (react) to be accepted
-we do this because browsers think different ports are a security threat,
-so we whitelist this interaction
-
-credentials: true tells the browser that cookies from backend and frontend are valid
-and should be remembered/saved */
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: CLIENT_URL,
     credentials: true
 }));
 
@@ -69,7 +43,6 @@ app.use(cors({
 (this part is not used yet, but will be for something like "mark as unsafe" feature) */
 app.use(express.json())
 
-/* this snippet decides how cookies work for our web app */
 app.use(session({
     store: new pgSession({
         pool: db.pool,
@@ -92,7 +65,7 @@ to basically mean that this guy can call Google*/
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: 'http://localhost:5000/auth/google/callback' //passport tells the user to go to this address after going to Google
+    callbackURL: process.env.GOOGLE_CALLBACK_URL //passport tells the user to go to this address after going to Google
 },
 
 //after the user logs in, we receive their google data
@@ -168,11 +141,11 @@ app.get('/auth/google',
 /* google sends the user back to the backend, and passport checks the details */
 app.get('/auth/google/callback', 
     passport.authenticate('google', {
-        failureRedirect: 'http://localhost:5173/login?error=true' //if the user is fake, go back to login
+        failureRedirect: `${CLIENT_URL}/login?error=true` //if the user is fake, go back to login
     }),
     (req, res) => { //if the user isnt fake...
 
-    res.redirect('http://localhost:5173/inbox'); //go to their respective inbox
+    res.redirect(`${CLIENT_URL}/inbox`); //go to their respective inbox
 });
 
 /* get current user is the frontend asking "who am i?" or "who is logged in?" 
@@ -187,7 +160,7 @@ app.get('/api/current_user', (req, res) => {
 app.get('/logout', (req, res, next) => {
     req.logout((err) => {
         if (err) return next(err);
-        res.redirect('http://localhost:5173');
+        res.redirect(CLIENT_URL);
     });
 });
 
