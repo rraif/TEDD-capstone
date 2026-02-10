@@ -27,6 +27,54 @@ const app = express();
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 
+const getGmailClient = (user) => {
+    if(!user || !user.refreshToken) {
+        throw new Error ('user not authenticated or missing refresh token');
+    }
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_CALLBACK_URL,
+        );
+        oauth2Client.setCredentials({refresh_token: user.refreshToken});
+        return google.gmail({version: 'v1', auth: oauth2Client});
+    
+};
+
+const getEmailBody = (payload) =>{
+    //if email body is just there, give it
+    if (payload.body && payload.body.data) {
+        return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+    }
+
+    //if email body is multipart (text, HTML, pics, attachments, etc.), look inside parts
+    if(payload.parts){
+        for(const part of payload.parts){
+            if(part.mimeType === 'text/plain' || part.mimeType === 'text/html'){
+                if(part.body && part.body.data) {
+                    return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+                }
+            }
+
+            if(part.parts){
+                const nestedBody = getEmailBody(part);
+                if(nestedBody) return nestedBody;
+            }
+        }
+    }
+    return 'No readable text found';
+}
+
+const requireGoogleAuth = (req, res, next) => {
+    if(!req.isAuthenticated()){
+        return res.status(401).json({error: 'please log in'});
+    }
+    if(!req.user.refreshToken){
+        return res.status(403).json({error: 'google account not linked properly'});
+    }
+    next();
+};
+
 //use helmet quite literally just "adds security"
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -52,7 +100,8 @@ app.use(session({
     resave:false, // our web app won't rewrite a user's data if nothings changed
     saveUninitialized: false, // our web app won't remember people who don't login
     cookie: {
-        secure: false,  // false for http, true for https
+        secure: process.env.NODE_ENV === 'production',  
+        httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000  // cookzie valid for 24 hours
     }
 }));
@@ -167,33 +216,10 @@ app.get('/logout', (req, res, next) => {
 /*define email route
 async allows us to use "await" which pauses execution while google fetches email data
 async just basically means this is a function that might take a while*/
-app.get('/api/emails', async (req, res) =>{
-
-    //check if user is not logged in or if the user is missing tokens
-    if(!req.isAuthenticated() || !req.user.refreshToken) {
-        return res.status(401).json({error: 'Unauthorized'});
-    }
-
+app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
     //if the user is valid,
     try {
-        //create a new instance of the oauth 2 client with our credentials
-        //to let google know its us
-        const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_CALLBACK_URL,
-        );
-
-
-        //load our keys into the client to identify the user
-        oauth2Client.setCredentials({
-            refresh_token: req.user.refreshToken
-        });
-
-
-        //create a gmail object
-        const gmail = google.gmail({version: 'v1', auth: oauth2Client});
-
+        const gmail = getGmailClient(req.user);
 
         /*this asks google to send the latest 10 emails of the current logged in accoun
         the await means dont do anything until google answers*/
@@ -247,10 +273,49 @@ app.get('/api/emails', async (req, res) =>{
 
     } catch (error) {
         console.error('Gmail API Error:', error);
-
         res.status(401).json({error: 'Token expired or invalid', details: error.message});
     }
 });
+
+app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
+
+    try {
+        const gmail = getGmailClient(req.user);
+
+        const response = await gmail.users.messages.get({
+            userId: 'me',
+            id: req.params.id,
+            format:'full'
+        });
+
+        const payload = response.data.payload;
+        const headers = payload.headers;
+        const rawBody = getEmailBody(payload);
+
+        const cleanData = {
+            id: response.data.id,
+      
+            subject: DOMPurify.sanitize(headers.find(h => h.name === 'Subject')?.value || '(No Subject)'),
+            from: DOMPurify.sanitize(headers.find(h => h.name === 'From')?.value || '(Unknown)'),
+            to: DOMPurify.sanitize(headers.find(h => h.name === 'To')?.value || '(Unknown)'),
+            date: headers.find(h => h.name === 'Date')?.value, 
+            
+            // CRITICAL: Sanitize the HTML Body
+            // This strips out <script> tags but keeps <b>, <p>, etc.
+            body: DOMPurify.sanitize(rawBody)
+        };
+
+        res.json({
+            basic: cleanData,
+            headers: headers    
+        });
+
+    } catch (error) {
+        console.error('gmail get error', error);
+        res.status(500).json({error:error.message});
+    }
+});
+
 
 //this just turns on the server
 app.listen(PORT, () => {
