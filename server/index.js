@@ -273,7 +273,7 @@ app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
 
     } catch (error) {
         console.error('Gmail API Error:', error);
-        res.status(401).json({error: 'Token expired or invalid', details: error.message});
+        res.status(401).json({error: 'Token expired or invalid'});
     }
 });
 
@@ -312,7 +312,7 @@ app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
 
     } catch (error) {
         console.error('gmail get error', error);
-        res.status(500).json({error:error.message});
+        res.status(500).json({error:"internal server error"});
     }
 });
 
