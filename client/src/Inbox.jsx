@@ -1,7 +1,7 @@
 //this is vibe coded, temporary use for testing
 import { useEffect, useState } from 'react';
 
-function Inbox() {
+const Inbox = () => {
   const [emails, setEmails] = useState(null);
 
   useEffect(() => {
@@ -14,10 +14,16 @@ function Inbox() {
     .catch(err => console.error(err));
   }, []);
 
+  const logout = () => {
+    const apiUrl = import.meta.env.VITE_API_URL;
+    window.location.href = `${apiUrl}/logout`;
+  };
+
   if (!emails) return <div>Loading your secure inbox...</div>;
 
   return (
     <div style={{ padding: '2rem' }}>
+      <button type="button" onClick={logout}>Logout</button>
       <h1>TEDD Secure Inbox</h1>
       <pre>{JSON.stringify(emails, null, 2)}</pre>
     </div>

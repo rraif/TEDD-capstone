@@ -158,9 +158,9 @@ app.get('/api/current_user', (req, res) => {
 
 
 app.get('/logout', (req, res, next) => {
-    req.logout((err) => {
-        if (err) return next(err);
-        res.redirect(CLIENT_URL);
+    req.logout(() => {
+        req.session.destroy();
+        res.redirect(process.env.CLIENT_URL);
     });
 });
 
