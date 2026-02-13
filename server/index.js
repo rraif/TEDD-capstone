@@ -161,7 +161,8 @@ passport.serializeUser((user, done) => {
     const sessionUser = {
         id: user.id,
         google_id: user.google_id,
-        encryptedRefreshToken: user.encryptedRefreshToken
+        encryptedRefreshToken: user.encryptedRefreshToken,
+        email: user.email
     };
     done(null, sessionUser);
 });
