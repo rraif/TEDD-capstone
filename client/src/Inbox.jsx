@@ -5,6 +5,8 @@ const Inbox = () => {
   const [emails, setEmails] = useState(null);
   const [selectedEmail, setSelectedEmail] = useState(null);
   const [showHeadersOnly, setShowHeadersOnly] = useState(false); // Make sure this is here!
+  const [scanResult, setScanResult] = useState(null);
+  const [isScanning, setIsScanning] = useState(false);
   const apiURL = import.meta.env.VITE_API_URL;
 
   useEffect(() => {
@@ -16,10 +18,34 @@ const Inbox = () => {
 
   const openEmail = async (id) => {
     try {
+      setScanResult(null);
+      setIsScanning(true);
+
       const res = await fetch(`${apiURL}/api/emails/${id}`, { credentials: 'include' });
       const data = await res.json();
       setSelectedEmail(data);
       setShowHeadersOnly(false); // Reset headers when opening a new email
+
+      //model
+      fetch(`${apiURL}/api/scan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emailId: id }),
+          credentials: 'include'
+      })
+      .then (res => {
+        if (!res.ok) throw new Error("Network response was not ok");
+        return res.json();
+      })
+      .then(scanData =>{
+        setScanResult(scanData);
+        setIsScanning(false);
+      })
+      .catch(err => {
+        console.error("Auto scan failed", err);
+        setIsScanning(false);
+      });
+
     } catch (err) {
       console.error('Failed to open email', err);
     }
@@ -75,6 +101,36 @@ const Inbox = () => {
 
       {/* Email Content */}
         <div className="p-8 max-w-5xl">
+{/* ZAKY CHANGE THIS PLEASE TO MAKE IT CLOSE TO DESIGN DOC THANKS VERY MUCH */}
+          <div className="mb-6">
+            {isScanning && (
+              <div className="flex items-center gap-2 text-blue-400 bg-blue-900/20 p-3 rounded-lg border border-blue-500/30 animate-pulse">
+                <span className="animate-spin text-xl">⏳</span>
+                <span>Analyzing content with AI...</span>
+              </div>
+            )}
+
+            {!isScanning && scanResult && (
+              <div className={`flex items-center gap-3 p-4 rounded-lg border shadow-lg ${
+                scanResult.verdict === 'Phishing' 
+                  ? 'bg-red-950/40 border-red-500/50 text-red-200' 
+                  : 'bg-green-950/40 border-green-500/50 text-green-200'
+              }`}>
+                <div className="text-3xl">
+                  {scanResult.verdict === 'Phishing' ? '⚠️' : '🛡️'}
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg">
+                    {scanResult.verdict === 'Phishing' ? "Warning: Phishing Detected" : "This email looks safe"}
+                  </h3>
+                  <p className="text-sm opacity-80">
+                    AI Confidence: {(scanResult.confidence * 100).toFixed(1)}%
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+          {/* === END OF AI SCAN BANNER === */}
           <h2 className="text-3xl font-normal text-white mb-6">
             {selectedEmail.basic.subject}
           </h2>

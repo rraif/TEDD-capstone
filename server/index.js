@@ -317,6 +317,52 @@ app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
     }
 });
 
+app.post('/api/scan', requireGoogleAuth, async(req, res) => {
+    const {emailId} = req.body;
+
+    if (!emailId) return res.status(400).json({error: 'email ID required'});
+
+    try{
+        //get email
+        const gmail = getGmailClient(req.user);
+        const response = await gmail.users.messages.get({
+            userId: 'me',
+            id: emailId,
+            format: 'full'
+        }); 
+
+        //clean body for the model
+        const payload = response.data.payload;
+        let rawBody = getEmailBody(payload); 
+        const cleanText = rawBody.replace(/\s+/g, ' ').trim().substring(0, 512);
+
+        //call model (might env this)
+        const mlUrl = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
+
+        const mlResponse = await fetch(`${mlUrl}/predict`, {
+            method:'POST',
+            headers:{
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({text: cleanText})
+        });
+
+        if (!mlResponse.ok) {
+            throw new Error(`Python API returned status: ${mlResponse.status}`);
+        }
+
+        const mlResult = await mlResponse.json();
+
+        res.json({
+            id: emailId,
+            verdict: mlResult.prediction,
+            confidence: mlResult.confidence   
+        });
+    } catch (error) {
+        console.error('Scan Error:', error.message);
+        res.status(503).json({ error: "Scan Failed", details: error.message });
+}
+});
 
 //this just turns on the server
 app.listen(PORT, () => {
