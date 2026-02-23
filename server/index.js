@@ -8,7 +8,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 100, //100 requests per 15 mins for each ip
+    limit: 5000, //change before deploy
     standardHeaders: true, 
     legacyHeaders: false,
     message: "Too many requests, try again later"
@@ -26,6 +26,15 @@ const {encrypt, decrypt} = require('./crypto.js');
 const app = express(); 
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
+
+const generateTeamCode = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+};
 
 const getGmailClient = (user) => {
     if(!user || !user.refreshToken) {
@@ -168,13 +177,27 @@ passport.serializeUser((user, done) => {
 });
 
 //you give the ticket to get that heavy data back, which was stored in the server
-passport.deserializeUser((sessionUser, done) => {
-    const user = {...sessionUser};
+passport.deserializeUser(async (sessionUser, done) => {
+    try {
+        //get newest user data
+        const result = await db.query('SELECT * FROM users WHERE google_id = $1', [sessionUser.google_id]);
 
-    if(user.encryptedRefreshToken){
-        user.refreshToken = decrypt(user.encryptedRefreshToken);
+        if (result.rows.length > 0) {
+            const freshUser = result.rows[0];
+
+            //refresh token so inbox still works
+            if (sessionUser.encryptedRefreshToken) {
+                freshUser.refreshToken = decrypt(sessionUser.encryptedRefreshToken);
+            }
+
+            done(null, freshUser);
+        } else {
+            done(null, false);
+        }
+    } catch (err) {
+        console.error("Deserialize error:", err);
+        done(err, null);
     }
-    done(null, user);
 });
 
 /* when the user clicks login,
@@ -362,6 +385,147 @@ app.post('/api/scan', requireGoogleAuth, async(req, res) => {
         console.error('Scan Error:', error.message);
         res.status(503).json({ error: "Scan Failed", details: error.message });
 }
+});
+
+//user profile
+app.get('/api/current-user', requireGoogleAuth, async (req, res) => {
+    try{
+        const userQuery = await db.query(
+            'SELECT user_id, google_id, email, display_name, user_score, title, team_id, is_team_admin FROM users WHERE google_id = $1',
+            [req.user.google_id]
+        );
+    
+        if (userQuery.rows.length === 0) {
+            return res.status(404).json({error: "user not in database"});
+        }
+
+        res.json(userQuery.rows[0]);
+    } catch (err) {
+        console.error("error fetching current user:", err);
+        res.status(500).json({error: "Server error"});
+    }
+});
+
+//creat team (dompurify the team name)
+app.post('/api/teams/create', requireGoogleAuth, async(req, res) =>{
+    const {teamName} = req.body;
+    const googleId = req.user.google_id;
+
+    if(!teamName) return res.status(400).json({error: "team name is required"});
+
+    try {
+        let isCodeUnique = false;
+        let newCode = '';
+
+        //generate code and check code collision
+        while (!isCodeUnique) {
+            newCode = generateTeamCode();
+            const check = await db.query('SELECT * FROM teams WHERE join_code =$1', [newCode]);
+            if (check.rows.length === 0) isCodeUnique = true;
+        }
+
+        //create team
+        const newTeam = await db.query(
+            `INSERT INTO teams (team_name, join_code, created_by) VALUES ($1, $2, $3) RETURNING *`,
+            [teamName, newCode, googleId]
+        );
+        const teamId = newTeam.rows[0].team_id;
+
+        //make creator the admin
+        await db.query(
+            'UPDATE users SET team_id = $1, is_team_admin = TRUE WHERE google_id = $2',
+            [teamId, googleId]
+        );
+
+        res.json({success: true, team: newTeam.rows[0]});
+    }catch (err) {
+        console.error('Create team error:', err);
+        res.status(500).json({error: 'failed to create team'});
+    }
+});
+
+//join team (dompurify the entering code)
+app.post('/api/teams/join', requireGoogleAuth, async(req, res) => {
+    const {joinCode} = req.body;
+    const googleId = req.user.google_id;
+
+    if (!joinCode) return res.status(400).json({error: 'join code required'});
+
+    try{
+        const teamResult = await db.query('SELECT * FROM teams WHERE join_code = $1', [joinCode.toUpperCase()]);
+
+        if (teamResult.rows.length === 0){
+            return res.status(404).json({error: 'invalid team code'});
+        }
+
+        const teamId = teamResult.rows[0].team_id;
+
+        //add non-admin user to team
+        await db.query(
+            'UPDATE users SET team_id = $1, is_team_admin = FALSE WHERE google_id = $2',
+            [teamId, googleId]
+        );
+
+        res.json({success: true, team: teamResult.rows[0]});
+    } catch (err) {
+        console.error('join team error:', err);
+        res.status(500).json({error: "Failed to join team"});
+    }
+});
+
+//get team
+app.get('/api/teams/current', requireGoogleAuth, async (req, res) =>{
+    try {
+        if (!req.user.team_id) return res.status(400).json({error: 'no team assigned'});
+
+        const teamRes = await db.query('SELECT * FROM teams WHERE team_id = $1', [req.user.team_id]);
+        if (teamRes.rows.length === 0) return res.status(404).json({error: "team not found"});
+
+        const membersRes = await db.query(
+            'SELECT user_id, display_name, email, user_score, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',
+            [req.user.team_id]
+        );
+
+        res.json({team: teamRes.rows[0], members: membersRes.rows});
+    } catch (err) {
+        console.error('Fetch team error:', err);
+        res.status(500).json({error:'server error'});
+    }
+});
+
+//kick member
+app.delete('/api/teams/members/:userId', requireGoogleAuth, async(req, res) => {
+    try{
+        if(!req.user.is_team_admin) return res.status(403).json({error: "admin feature only"});
+
+        await db.query(
+            'UPDATE users SET team_id = NULL, is_team_admin = FALSE WHERE user_id = $1 AND team_id = $2',
+            [req.params.userId, req.user.team_id]
+        );
+
+        res.json({success: true});
+    } catch (err) {
+        console.error('Kick member error:', err);
+        res.status(500).json({error: "server error"});
+    }
+});
+
+//delete entire team (it has to remove users first before deleting team)
+//or else the team cant be deleted
+app.delete('/api/teams/current', requireGoogleAuth, async (req, res) => {
+    try {
+        if (!req.user.is_team_admin) return res.status(403).json({error: "admin action only"});
+
+        //doesnt this just remove members? the admin is still in, so it cant be deleted?
+        await db.query('UPDATE users SET team_id = NULL, is_team_admin = FALSE WHERE team_id = $1', [req.user.team_id]);
+    
+        await db.query('DELETE FROM teams WHERE team_id = $1', [req.user.team_id]);
+
+        res.json({success: true});
+    } catch(err){
+        console.error('Delete team error:', err);
+        res.status(500).json({error: "server error"});
+    }
 });
 
 //this just turns on the server

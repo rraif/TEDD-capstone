@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 const Inbox = () => {
   const [emails, setEmails] = useState(null);
   const [selectedEmail, setSelectedEmail] = useState(null);
-  const [showHeadersOnly, setShowHeadersOnly] = useState(false); // Make sure this is here!
+  const [showHeadersOnly, setShowHeadersOnly] = useState(false); 
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const apiURL = import.meta.env.VITE_API_URL;
@@ -101,7 +101,7 @@ const Inbox = () => {
 
       {/* Email Content */}
         <div className="p-8 max-w-5xl">
-{/* ZAKY CHANGE THIS PLEASE TO MAKE IT CLOSE TO DESIGN DOC THANKS VERY MUCH */}
+          {/* ZAKY CHANGE THIS PLEASE TO MAKE IT CLOSE TO DESIGN DOC THANKS VERY MUCH */}
           <div className="mb-6">
             {isScanning && (
               <div className="flex items-center gap-2 text-blue-400 bg-blue-900/20 p-3 rounded-lg border border-blue-500/30 animate-pulse">
@@ -190,17 +190,14 @@ const Inbox = () => {
   // ==========================================
   return (
     <div className="bg-[#0F172A] min-h-full">
-      
-      
-
       {/* Email List */}
      <div className="flex flex-col">
         {/* Notice we added 'index' here 👇 */}
+        {/* 👇 Here is the magic! We use a template literal to swap the background color */}
         {emails.map((email, index) => (
           <div 
             key={email.id} 
             onClick={() => openEmail(email.id)}
-            // 👇 Here is the magic! We use a template literal to swap the background color
             className={`group flex items-center gap-4 px-4 py-2.5 border-b border-slate-800/80 hover:bg-slate-800/60 hover:shadow-sm transition-all cursor-pointer ${
               index % 2 === 0 ? 'bg-[#020617]' : 'bg-[#0F172A]'
             }`}
@@ -213,7 +210,7 @@ const Inbox = () => {
                 className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 cursor-pointer"
                 onClick={(e) => e.stopPropagation()} 
               />
-          {/* Changed hover color to a light slate, and swapped the SVG path */}
+              {/* Changed hover color to a light slate, and swapped the SVG path */}
               <button 
                 className="hover:text-slate-300 transition-colors focus:outline-none"
                 onClick={(e) => {
@@ -250,10 +247,8 @@ const Inbox = () => {
           </div>
         ))}
       </div>
-
     </div>
   );
 }
 
 export default Inbox;
-

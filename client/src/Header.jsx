@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import teddLogo from './assets/TEDD-Logo-White.svg';
 
-export default function Header() {
+export default function Header({}) {
   const [userEmail, setUserEmail] = useState("Loading...");
   const [userInitial, setUserInitial] = useState("");
 

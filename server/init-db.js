@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const db = require('./database.js');
 
 
@@ -32,10 +33,25 @@ async function initDatabase() {
     WITH (OIDS=FALSE);
     `;
 
+    const createTeamsTable = `
+        CREATE TABLE IF NOT EXISTS teams (
+        team_id SERIAL PRIMARY KEY,
+        team_name VARCHAR(255) NOT NULL,
+        join_code VARCHAR(6) UNIQUE NOT NULL,
+        created_by VARCHAR(255) NOT NULL, -- google_id of creator
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    `;
+
     await db.query(createUsersTable);
     await db.query(createSessionsTable);
+    await db.query(createTeamsTable);
     
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(team_id);`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_team_admin BOOLEAN DEFAULT FALSE;`);
+
     await db.query(`
+      ALTER TABLE "session" DROP CONSTRAINT IF EXISTS "session_pkey";
       ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
     `);
     
@@ -43,7 +59,7 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
     `);
 
-    console.log("users and sessions table created");
+    console.log("users, sessions, teams created");
     process.exit(0);
     
   } catch (err) {

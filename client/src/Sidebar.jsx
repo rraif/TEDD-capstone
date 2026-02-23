@@ -1,11 +1,12 @@
 import React from 'react';
+import { NavLink } from 'react-router-dom';
 
-export default function Sidebar({ onLogout }) {
+export default function Sidebar({ user, onLogout }) {
   const navItems = [
-    { name: 'Inbox', icon: '📥' },
-    { name: 'Training', icon: '🎓' },
-    { name: 'Stats', icon: '📊' },
-    { name: 'Hidden', icon: '👁️‍🗨️' },
+    { name: 'Inbox', icon: '📥', path: '/inbox' },
+    { name: 'Training', icon: '🎓', path: '/training' },
+    { name: 'Stats', icon: '📊', path: '/stats' },
+    { name: 'Hidden', icon: '👁️‍🗨️', path: '/hidden' },
   ];
 
   return (
@@ -14,17 +15,40 @@ export default function Sidebar({ onLogout }) {
       {/* Navigation Options */}
       <nav className="flex flex-col gap-2">
         {navItems.map((item) => (
-          <button
+          <NavLink
             key={item.name}
-            className="flex items-center gap-4 px-4 py-3 rounded-lg transition-all duration-200 
-                       text-slate-400 hover:bg-slate-800 hover:text-white group"
+            to={item.path}
+            className={({ isActive }) => 
+              `flex items-center gap-4 px-4 py-3 rounded-lg transition-all duration-200 group ` +
+              (isActive 
+                ? `bg-blue-600/20 text-blue-400 font-bold` // Highlight active tab
+                : `text-slate-400 hover:bg-slate-800 hover:text-white font-medium`)
+            }
           >
             <span className="text-xl group-hover:scale-110 transition-transform">
               {item.icon}
             </span>
-            <span className="font-medium">{item.name}</span>
-          </button>
+            <span>{item.name}</span>
+          </NavLink>
         ))}
+
+      {/* --- ADMIN BUTTON --- */}
+        {user?.is_team_admin && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) => 
+              `flex items-center gap-4 px-4 py-3 rounded-lg transition-all duration-200 group mt-4 border border-transparent ` +
+              (isActive 
+                ? `bg-purple-900/20 text-purple-400 border-purple-500/30 font-bold` 
+                : `text-slate-400 hover:bg-slate-800 hover:text-white font-medium`)
+            }
+          >
+            <span className="text-xl group-hover:scale-110 transition-transform">
+              👑
+            </span>
+            <span>Team Admin</span>
+          </NavLink>
+        )}
       </nav>
 
       {/* Logout Button - Pushed to the bottom using mt-auto */}
