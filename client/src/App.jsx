@@ -1,9 +1,9 @@
 // client/src/App.jsx
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Login from './Login'; // Import the file you just created
-import Inbox from './Inbox'; // Import the inbox we made earlier
-import Layout from './Layout'; //This will store the header and sidebar for all pages
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Login from './Login'; 
+import Inbox from './Inbox'; 
+import Layout from './Layout'; 
 import Admin from './Admin';
 
 function App() {
@@ -16,18 +16,27 @@ function App() {
         {/* Explicit Login Route */}
         <Route path="/login" element={<Login />} />
         
-        {/* The Inbox Route (Where the backend sends you) */}
-       <Route element={<Layout />}>
-          <Route path="/inbox" element={<Inbox />} />
+        {/* Authenticated Routes wrapped in Layout (Sidebar/Header) */}
+        <Route element={<Layout />}>
+          
+          {/* Standard Inbox Mode */}
+          <Route 
+            path="/inbox" 
+            element={<Inbox viewType="inbox" apiEndpoint="/api/emails" />} 
+          />
+          
+          {/* Hidden Emails Mode */}
+          <Route 
+            path="/hidden" 
+            element={<Inbox viewType="hidden" apiEndpoint="/api/emails/hidden" />} 
+          />
+          
           <Route path="/admin" element={<Admin />} />
-          {/* Any other pages you add later (e.g., /settings) go here! */}
           
         </Route>
       </Routes>
     </BrowserRouter>
   );
 }
-        
-      
 
 export default App;
