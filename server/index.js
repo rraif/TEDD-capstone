@@ -22,6 +22,7 @@ const cors = require('cors');
 const {google} = require('googleapis'); 
 const DOMPurify = require('isomorphic-dompurify');
 const {encrypt, decrypt} = require('./crypto.js');
+const crypto = require('crypto');
 
 const app = express(); 
 const PORT = process.env.PORT;
@@ -411,23 +412,32 @@ app.post('/api/teams/create', requireGoogleAuth, async(req, res) =>{
     const {teamName} = req.body;
     const googleId = req.user.google_id;
 
-    if(!teamName) return res.status(400).json({error: "team name is required"});
+    const cleanTeamName = DOMPurify.sanitize(teamName);
+
+    if(!cleanTeamName) return res.status(400).json({error: "team name is required"});
 
     try {
         let isCodeUnique = false;
         let newCode = '';
+        let hashedCode = '';
 
         //generate code and check code collision
         while (!isCodeUnique) {
             newCode = generateTeamCode();
-            const check = await db.query('SELECT * FROM teams WHERE join_code =$1', [newCode]);
+
+            hashedCode = crypto.createHash('sha256').update(newCode).digest('hex');
+
+            const check = await db.query('SELECT * FROM teams WHERE hashed_join_code =$1', [hashedCode]);
             if (check.rows.length === 0) isCodeUnique = true;
         }
 
+
+        const encryptedCode = encrypt(newCode);
+
         //create team
         const newTeam = await db.query(
-            `INSERT INTO teams (team_name, join_code, created_by) VALUES ($1, $2, $3) RETURNING *`,
-            [teamName, newCode, googleId]
+            `INSERT INTO teams (team_name, hashed_join_code, encrypted_join_code, created_by) VALUES ($1, $2, $3, $4) RETURNING *`,
+            [cleanTeamName, hashedCode, encryptedCode, googleId]
         );
         const teamId = newTeam.rows[0].team_id;
 
@@ -437,7 +447,10 @@ app.post('/api/teams/create', requireGoogleAuth, async(req, res) =>{
             [teamId, googleId]
         );
 
-        res.json({success: true, team: newTeam.rows[0]});
+        const teamResponse = newTeam.rows[0];
+        teamResponse.join_code = newCode;
+
+        res.json({success: true, team: teamResponse});
     }catch (err) {
         console.error('Create team error:', err);
         res.status(500).json({error: 'failed to create team'});
@@ -451,8 +464,11 @@ app.post('/api/teams/join', requireGoogleAuth, async(req, res) => {
 
     if (!joinCode) return res.status(400).json({error: 'join code required'});
 
+    const cleanJoinCode = DOMPurify.sanitize(joinCode.toUpperCase());
+
     try{
-        const teamResult = await db.query('SELECT * FROM teams WHERE join_code = $1', [joinCode.toUpperCase()]);
+        const hashedInput = crypto.createHash('sha256').update(cleanJoinCode).digest('hex');
+        const teamResult = await db.query('SELECT * FROM teams WHERE hashed_join_code = $1', [hashedInput]);
 
         if (teamResult.rows.length === 0){
             return res.status(404).json({error: 'invalid team code'});
@@ -480,6 +496,15 @@ app.get('/api/teams/current', requireGoogleAuth, async (req, res) =>{
 
         const teamRes = await db.query('SELECT * FROM teams WHERE team_id = $1', [req.user.team_id]);
         if (teamRes.rows.length === 0) return res.status(404).json({error: "team not found"});
+
+        const teamData = teamRes.rows[0];
+
+        try{
+            teamData.join_code = decrypt(teamData.encrypted_join_code);
+        } catch(decryptErr){
+            console.error("Decryption failed", decryptErr);
+            teamData.join_code = 'error_decrypting';
+        }
 
         const membersRes = await db.query(
             'SELECT user_id, display_name, email, user_score, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',

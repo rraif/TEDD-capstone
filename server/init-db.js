@@ -37,7 +37,8 @@ async function initDatabase() {
         CREATE TABLE IF NOT EXISTS teams (
         team_id SERIAL PRIMARY KEY,
         team_name VARCHAR(255) NOT NULL,
-        join_code VARCHAR(6) UNIQUE NOT NULL,
+        hashed_join_code VARCHAR(64) UNIQUE NOT NULL,
+        encrypted_join_code TEXT NOT NULL,           
         created_by VARCHAR(255) NOT NULL, -- google_id of creator
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
