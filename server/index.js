@@ -28,6 +28,9 @@ const app = express();
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 
+const MAX_EMAILS = 25;       
+const FETCH_CHUNK_SIZE = 45; // How many to grab from Google per API call
+
 const generateTeamCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -242,46 +245,63 @@ app.get('/logout', (req, res, next) => {
 async allows us to use "await" which pauses execution while google fetches email data
 async just basically means this is a function that might take a while*/
 app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
-    //if the user is valid,
-    try {
-        const gmail = getGmailClient(req.user);
+try {
+        const googleId = req.user.google_id;
+        
+        // 1. Fetch hidden IDs
+        const hiddenQuery = await db.query('SELECT email_id FROM hidden_emails WHERE google_id = $1', [googleId]);
+        const hiddenIds = hiddenQuery.rows.map(row => row.email_id);
 
-        /*this asks google to send the latest 10 emails of the current logged in accoun
-        the await means dont do anything until google answers*/
-        const listResponse = await gmail.users.messages.list({
-            userId:'me',
-            maxResults: 10 
-        });
+        // Setup Gmail Client
+        const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+        oauth2Client.setCredentials({ refresh_token: req.user.refreshToken });
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        //this makes an array of message IDs (ticket that links to an email)
-        const messages = listResponse.data.messages;
+        // 2. Loop through Gmail pages until we find 10 visible emails
+        let visibleMessages = [];
+        let pageToken = undefined;
 
-        //if no emails, return json of NOTHING
-        if (!messages || messages.length === 0) {
-            return res.json([]);
+        while (visibleMessages.length < MAX_EMAILS) {
+            const listResponse = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: FETCH_CHUNK_SIZE, // Fetch in chunks of 20 to be efficient
+                pageToken: pageToken
+            });
+
+            const messages = listResponse.data.messages || [];
+            if (messages.length === 0) break; // We reached the absolute end of their inbox
+
+            // Filter this chunk
+            const newlyVisible = messages.filter(msg => !hiddenIds.includes(msg.id));
+            visibleMessages = visibleMessages.concat(newlyVisible);
+
+            pageToken = listResponse.data.nextPageToken;
+            if (!pageToken) break; // No more pages to fetch
         }
 
-        //goes to where you get the emails
-        const emailDetails = await Promise.all(//promise makes it run in parallel
-            messages.map(async (msg) => {
+        // 3. Slice the array to guarantee EXACTLY 10 emails (in case the last chunk pushed us to 12 or 15)
+        visibleMessages = visibleMessages.slice(0, MAX_EMAILS);
 
-                //gets the raw email data
+        if (visibleMessages.length === 0) {
+            return res.json({ emails: [] });
+        }
+
+        // 4. Fetch the actual content for our 10 confirmed visible emails
+        const emailDetails = await Promise.all(
+            visibleMessages.map(async (msg) => {
                 const detail = await gmail.users.messages.get({
                     userId: 'me',
                     id: msg.id,
-                    format: 'full'
+                    format: 'metadata'
                 });
             
-                //cleans the email data to get individual elements
                 const headers = detail.data.payload.headers;
                 const subject = DOMPurify.sanitize(headers.find(h => h.name === 'Subject')?.value || '(No Subject)');
                 const from = DOMPurify.sanitize(headers.find(h => h.name === 'From')?.value || '(Unknown)');
                 const snippet = DOMPurify.sanitize(detail.data.snippet);
                 const date = headers.find(h => h.name === 'Date')?.value;
                 
-
-                //"readies" the cleaned data
-                return{
+                return {
                     id: msg.id,
                     threadId: msg.threadId,
                     subject: subject,
@@ -292,15 +312,99 @@ app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
             })
         );
 
-
-        //presents or serves the cleaned email data to the frontend
-        res.json(emailDetails);
-
+        res.json({ emails: emailDetails });
     } catch (error) {
         console.error('Gmail API Error:', error);
         res.status(401).json({error: 'Token expired or invalid'});
     }
 });
+
+app.post('/api/emails/hide', requireGoogleAuth, async (req, res) => {
+    const {emailId} = req.body;
+    const googleId = req.user.google_id;
+
+    if(!emailId) return res.status(400).json({error: 'email id required'});
+
+    try {
+        await db.query(
+        'INSERT INTO hidden_emails (google_id, email_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', 
+        [googleId, emailId]
+        );
+        res.json({success: true});
+    } catch (err) {
+        console.error('error hiding email:', err);
+        res.status(500).json({error: 'server error while hiding email'});
+    }
+});
+
+app.get('/api/emails/hidden', requireGoogleAuth, async (req, res) => {
+    const googleId = req.user.google_id;
+
+    try{
+        const hiddenQuery = await db.query('SELECT email_id FROM hidden_emails WHERE google_id = $1', [googleId]);
+        const hiddenIds = hiddenQuery.rows.map(row => row.email_id);
+
+        if (hiddenIds.length === 0){
+            return res.json({success: true, emails: []});
+        }
+
+        const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+        oauth2Client.setCredentials({refresh_token: req.user.refreshToken});
+        const gmail = google.gmail({version: 'v1', auth: oauth2Client});
+
+        const emailDetails =  [];
+
+        for (const id of hiddenIds){
+            try{
+                const mail = await gmail.users.messages.get({
+                    userId: 'me',
+                    id: id,
+                    format: 'metadata',
+                    metadataHeaders: ['Subject', 'From', 'Date']      
+                });
+
+                //purify?
+                const headers = mail.data.payload.headers;
+                const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject';
+                const from = headers.find(h => h.name === 'From')?.value || 'Unknown Sender';
+                const date = headers.find(h => h.name === 'Date')?.value || '';
+
+                emailDetails.push({
+                    id: mail.data.id, 
+                    subject, 
+                    from, 
+                    date, 
+                    snippet: mail.data.snippet }
+                );
+            } catch (gmailErr) {
+                console.error(`cannot fetch hidden email ${id}:`, gmailErr.message);
+            }
+        }
+           res.json({success: true, emails: emailDetails});
+    } catch (err) {
+        console.error('Error fetching hidden emails:', err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+app.post('/api/emails/unhide', requireGoogleAuth, async (req, res) => {
+    const { emailId } = req.body;
+    const googleId = req.user.google_id;
+
+    if (!emailId) return res.status(400).json({ error: "Email ID is required" });
+
+    try {
+        await db.query(
+            'DELETE FROM hidden_emails WHERE google_id = $1 AND email_id = $2',
+            [googleId, emailId]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error unhiding email:', err);
+        res.status(500).json({ error: "Server error while unhiding email" });
+    }
+});
+
 
 app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
 
