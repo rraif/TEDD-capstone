@@ -11,6 +11,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   // 🛡️ BULLETPROOF FETCH: Prevents the White Screen of Death
   useEffect(() => {
     setEmails(null);
+    setSelectedEmail(null);
     fetch(`${apiURL}${apiEndpoint}`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
@@ -166,7 +167,8 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   if (selectedEmail) {
     return (
       <div className="bg-[#020617] min-h-full flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 sticky top-0 bg-[#020617] z-10">         
+        {/* Top Navigation Bar */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 sticky top-0 bg-[#020617] z-20 shadow-md">         
           <button 
             onClick={() => setSelectedEmail(null)}
             className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-slate-800"
@@ -207,84 +209,141 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
           )}
         </div> 
 
-        <div className="p-8 max-w-5xl">
-          <div className="mb-6">
+        {/* 🚀 THE NEW SPLIT LAYOUT */}
+        <div className="p-8 max-w-full mx-auto flex flex-col xl:flex-row gap-8 items-start w-full">
+          
+          {/* LEFT COLUMN: The actual email content */}
+          <div className="flex-1 min-w-0 w-full xl:w-[calc(100%-320px)]">
+            <h2 className="text-3xl font-normal text-white mb-6 break-words">
+              {selectedEmail.basic.subject}
+            </h2>
+            
+            <div className="flex items-start justify-between mb-8 border-b border-slate-800/80 pb-6">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 shrink-0 rounded-full bg-blue-900/50 text-blue-300 flex items-center justify-center font-bold text-lg border border-blue-800/50">
+                  {formatSender(selectedEmail.basic.from).charAt(0)}
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-200 text-sm truncate">
+                    {selectedEmail.basic.from}
+                  </div>
+                  <div className="text-xs text-slate-400 truncate">
+                    to {selectedEmail.basic.to || 'me'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col items-end gap-1 shrink-0 ml-4">
+                <div className="text-sm text-slate-400">
+                  {selectedEmail.basic.date}
+                </div>
+                <button 
+                  onClick={() => setShowHeadersOnly(!showHeadersOnly)}
+                  className="text-xs text-blue-400 hover:text-blue-300 hover:underline transition-colors focus:outline-none"
+                >
+                  {showHeadersOnly ? "Hide Email Header" : "View Email Header"}
+                </button>
+              </div>
+            </div>
+
+            {showHeadersOnly && (
+              <div className="mb-8 p-5 bg-[#020617] rounded-lg border border-slate-800 overflow-x-auto shadow-inner">
+                <div className="text-xs text-slate-500 mb-4 font-bold uppercase tracking-wider border-b border-slate-800 pb-2">
+                  Original Message Headers
+                </div>
+                
+                <div className="text-xs font-mono flex flex-col gap-1.5 min-w-[600px] mb-8">
+                  {selectedEmail.headers.map((header, index) => {
+                    const authenticValue = header.value.replace(/(\s{2,}|\t+)/g, '\n$1'); 
+                    return (
+                      <div key={index} className="grid grid-cols-[160px_1fr] gap-4 hover:bg-slate-800/50 p-1 rounded transition-colors">
+                        <div className="text-slate-400 font-semibold text-right mt-0.5">
+                          {header.name}:
+                        </div>
+                        <div className="text-slate-200 break-words whitespace-pre-wrap leading-relaxed">
+                          {authenticValue}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="text-xs text-slate-500 mb-4 font-bold uppercase tracking-wider border-b border-slate-800 pb-2">
+                  Raw MIME Payload
+                </div>
+                <pre className="text-xs text-slate-400 font-mono whitespace-pre-wrap break-words leading-relaxed min-w-[600px]">
+                  {selectedEmail.rawMimeBody}
+                </pre>
+              </div>
+            )}
+
+            <div className="p-5 bg-[#020617] rounded-lg border border-slate-800 overflow-x-auto shadow-inner mb-8">
+              <div className="text-xs text-slate-500 mb-4 font-bold uppercase tracking-wider border-b border-slate-800 pb-2">
+                Message Content
+              </div>
+              <div 
+                className="bg-white text-black p-6 rounded-md text-sm leading-relaxed max-w-none break-words"
+                dangerouslySetInnerHTML={{ __html: selectedEmail.basic.body }}
+              />
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: The AI Security Inspector Panel */}
+          <div className="w-full xl:w-80 shrink-0 sticky top-20">
+            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4 border-b border-slate-800/80 pb-2">
+              Security Analysis
+            </h3>
+
             {isScanning && (
-              <div className="flex items-center gap-2 text-blue-400 bg-blue-900/20 p-3 rounded-lg border border-blue-500/30 animate-pulse">
-                <span className="animate-spin text-xl">⏳</span>
-                <span>Analyzing content with AI...</span>
+              <div className="flex flex-col items-center justify-center gap-5 text-blue-400 bg-blue-900/20 p-8 rounded-lg border border-blue-500/30 text-center">
+                {/* Replaced the hourglass emoji with a professional SVG spinner */}
+                <svg className="animate-spin h-10 w-10 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <div className="space-y-2 animate-pulse">
+                  <div className="font-bold">Scanning Payload</div>
+                  <div className="text-xs opacity-70">Running BERT Model...</div>
+                </div>
               </div>
             )}
 
             {!isScanning && scanResult && (
-              <div className={`flex items-center gap-3 p-4 rounded-lg border shadow-lg ${
-                scanResult.verdict === 'Phishing' 
-                  ? 'bg-red-950/40 border-red-500/50 text-red-200' 
-                  : 'bg-green-950/40 border-green-500/50 text-green-200'
-              }`}>
-                <div className="text-3xl">
-                  {scanResult.verdict === 'Phishing' ? '⚠️' : '🛡️'}
-                </div>
-                <div>
-                  <h3 className="font-bold text-lg">
-                    {scanResult.verdict === 'Phishing' ? "Warning: Phishing Detected" : "This email looks safe"}
+              <>
+                {/* 1. The Main Verdict Card (Emojis Removed) */}
+                <div className={`flex flex-col items-center p-6 rounded-lg border shadow-lg text-center ${
+                  scanResult.verdict === 'Phishing' 
+                    ? 'bg-red-950/40 border-red-500/50 text-red-200' 
+                    : 'bg-green-950/40 border-green-500/50 text-green-200'
+                }`}>
+                  <h3 className="font-bold text-xl mb-3">
+                    {scanResult.verdict === 'Phishing' ? "Phishing Detected" : "Looks Safe"}
                   </h3>
-                  <p className="text-sm opacity-80">
-                    AI Confidence: {(scanResult.confidence * 100).toFixed(1)}%
-                  </p>
+                  <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
+                    Confidence: {(scanResult.confidence * 100).toFixed(1)}%
+                  </div>
                 </div>
-              </div>
+
+                {/* 2. The Explainable AI Placeholder Box (Emojis Removed) */}
+                {scanResult.verdict === 'Phishing' && (
+                  <div className="mt-4 bg-[#020617] border border-slate-800 rounded-lg p-5 shadow-lg relative overflow-hidden">
+                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 to-blue-500 opacity-50"></div>
+                    
+                    <div className="mb-3 text-purple-400 font-bold text-xs uppercase tracking-wider mt-1">
+                      Phishing Explanation
+                    </div>
+                    
+                    <p className="text-slate-400 text-sm leading-relaxed">
+                      Explanation Goes here
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </div>
-
-          <h2 className="text-3xl font-normal text-white mb-6">
-            {selectedEmail.basic.subject}
-          </h2>
-          
-          <div className="flex items-start justify-between mb-8 border-b border-slate-800/80 pb-6">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-blue-900/50 text-blue-300 flex items-center justify-center font-bold text-lg border border-blue-800/50">
-                {formatSender(selectedEmail.basic.from).charAt(0)}
-              </div>
-              <div>
-                <div className="font-bold text-slate-200 text-sm">
-                  {selectedEmail.basic.from}
-                </div>
-                <div className="text-xs text-slate-400">
-                  to {selectedEmail.basic.to || 'me'}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col items-end gap-1">
-              <div className="text-sm text-slate-400">
-                {selectedEmail.basic.date}
-              </div>
-              <button 
-                onClick={() => setShowHeadersOnly(!showHeadersOnly)}
-                className="text-xs text-blue-400 hover:text-blue-300 hover:underline transition-colors focus:outline-none"
-              >
-                {showHeadersOnly ? "Hide Email Header" : "View Email Header"}
-              </button>
-            </div>
-          </div>
-
-          {showHeadersOnly && (
-            <div className="mb-8 p-4 bg-slate-900 rounded-lg border border-slate-700 overflow-x-auto shadow-inner">
-              <div className="text-xs text-slate-500 mb-2 font-bold uppercase tracking-wider">Raw Email Headers</div>
-              <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap">
-                {JSON.stringify(selectedEmail.headers, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          <div 
-            className="text-slate-300 text-sm leading-relaxed max-w-none"
-            dangerouslySetInnerHTML={{ __html: selectedEmail.basic.body }}
-          />
         </div>
       </div>
-    )
+    );
   }
 
   // ==========================================
