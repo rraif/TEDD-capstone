@@ -54,29 +54,77 @@ const getGmailClient = (user) => {
     
 };
 
-const getEmailBody = (payload) =>{
-    //if email body is just there, give it
+const getEmailBody = async (payload, gmail = null, messageId = null) => {
+    let htmlBody = '';
+    let plainBody = '';
+    let inlineImages = {}; 
+
+    // 🚀 2. Made the recursive helper async
+    const extractParts = async (part) => {
+        if (part.mimeType === 'text/html' && part.body && part.body.data) {
+            htmlBody = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        } 
+        else if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+            plainBody = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        }
+        // 🚀 3. THE FIX: Look for attachmentId if data is missing!
+        else if (part.headers && part.body && part.mimeType.startsWith('image/')) {
+            const cidHeader = part.headers.find(h => h.name.toLowerCase() === 'content-id');
+            if (cidHeader) {
+                const cid = cidHeader.value.replace(/[<>]/g, '');
+                let base64Data = null;
+                
+                // If it's a tiny image, Google gives us the data directly
+                if (part.body.data) {
+                    base64Data = part.body.data;
+                } 
+                // If it's a normal/large image, we have to fetch it using the attachmentId
+                else if (part.body.attachmentId && gmail && messageId) {
+                    try {
+                        const attachment = await gmail.users.messages.attachments.get({
+                            userId: 'me',
+                            messageId: messageId,
+                            id: part.body.attachmentId
+                        });
+                        base64Data = attachment.data.data;
+                    } catch (err) {
+                        console.error('Failed to fetch image attachment:', err);
+                    }
+                }
+                
+                if (base64Data) {
+                    const cleanBase64 = base64Data.replace(/-/g, '+').replace(/_/g, '/');
+                    inlineImages[cid] = `data:${part.mimeType};base64,${cleanBase64}`;
+                }
+            }
+        }
+
+        // 🚀 4. Await the recursive digger
+        if (part.parts) {
+            for (const subPart of part.parts) {
+                await extractParts(subPart); 
+            }
+        }
+    };
+
     if (payload.body && payload.body.data) {
         return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
     }
 
-    //if email body is multipart (text, HTML, pics, attachments, etc.), look inside parts
-    if(payload.parts){
-        for(const part of payload.parts){
-            if(part.mimeType === 'text/plain' || part.mimeType === 'text/html'){
-                if(part.body && part.body.data) {
-                    return Buffer.from(part.body.data, 'base64url').toString('utf-8');
-                }
-            }
+    // 🚀 5. Await the main extraction
+    await extractParts(payload);
 
-            if(part.parts){
-                const nestedBody = getEmailBody(part);
-                if(nestedBody) return nestedBody;
-            }
+    let finalBody = htmlBody || plainBody || 'No readable text found';
+
+    if (Object.keys(inlineImages).length > 0 && finalBody !== 'No readable text found') {
+        for (const [cid, dataUri] of Object.entries(inlineImages)) {
+            const cidRegex = new RegExp(`cid:${cid}`, 'g');
+            finalBody = finalBody.replace(cidRegex, dataUri);
         }
     }
-    return 'No readable text found';
-}
+    
+    return finalBody;
+};
 
 const requireGoogleAuth = (req, res, next) => {
     if(!req.isAuthenticated()){
@@ -407,36 +455,39 @@ app.post('/api/emails/unhide', requireGoogleAuth, async (req, res) => {
 
 
 app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
-
-    try {
+try {
         const gmail = getGmailClient(req.user);
 
-        const response = await gmail.users.messages.get({
-            userId: 'me',
-            id: req.params.id,
-            format:'full'
-        });
+        // 🚀 1. Fetch BOTH the parsed 'full' data and the 'raw' MIME data concurrently
+        const [response, rawResponse] = await Promise.all([
+            gmail.users.messages.get({ userId: 'me', id: req.params.id, format: 'full' }),
+            gmail.users.messages.get({ userId: 'me', id: req.params.id, format: 'raw' })
+        ]);
 
         const payload = response.data.payload;
         const headers = payload.headers;
-        const rawBody = getEmailBody(payload);
+        
+        // Ensure you are using the async getEmailBody we fixed earlier!
+        const rawBody = await getEmailBody(payload, gmail, req.params.id);
+
+        // 🚀 2. Decode the raw email and extract the MIME boundaries
+        const rawEmailString = Buffer.from(rawResponse.data.raw, 'base64url').toString('utf-8');
+        const splitIndex = rawEmailString.indexOf('\r\n\r\n'); // Headers end at the first double-space
+        const rawMimeBody = splitIndex !== -1 ? rawEmailString.substring(splitIndex + 4) : 'No raw body found.';
 
         const cleanData = {
             id: response.data.id,
-      
             subject: DOMPurify.sanitize(headers.find(h => h.name === 'Subject')?.value || '(No Subject)'),
             from: DOMPurify.sanitize(headers.find(h => h.name === 'From')?.value || '(Unknown)'),
             to: DOMPurify.sanitize(headers.find(h => h.name === 'To')?.value || '(Unknown)'),
             date: headers.find(h => h.name === 'Date')?.value, 
-            
-            // CRITICAL: Sanitize the HTML Body
-            // This strips out <script> tags but keeps <b>, <p>, etc.
             body: DOMPurify.sanitize(rawBody)
         };
 
         res.json({
             basic: cleanData,
-            headers: headers    
+            headers: headers,
+            rawMimeBody: rawMimeBody // 🚀 3. Send the raw MIME text to the frontend
         });
 
     } catch (error) {
@@ -461,7 +512,7 @@ app.post('/api/scan', requireGoogleAuth, async(req, res) => {
 
         //clean body for the model
         const payload = response.data.payload;
-        let rawBody = getEmailBody(payload); 
+        let rawBody = await getEmailBody(payload, gmail, req.params.id); 
         const cleanText = rawBody.replace(/\s+/g, ' ').trim().substring(0, 512);
 
         //call model (might env this)
