@@ -497,33 +497,32 @@ try {
 });
 
 app.post('/api/scan', requireGoogleAuth, async(req, res) => {
-    const {emailId} = req.body;
+const {emailId} = req.body;
 
+    // 1. Safety check (kept from your old code!)
     if (!emailId) return res.status(400).json({error: 'email ID required'});
 
     try{
-        //get email
         const gmail = getGmailClient(req.user);
+        
+        // 2. Get RAW email (Changed from 'full' to 'raw' because the new model needs the whole MIME string)
         const response = await gmail.users.messages.get({
             userId: 'me',
             id: emailId,
-            format: 'full'
+            format: 'raw'
         }); 
 
-        //clean body for the model
-        const payload = response.data.payload;
-        let rawBody = await getEmailBody(payload, gmail, req.params.id); 
-        const cleanText = rawBody.replace(/\s+/g, ' ').trim().substring(0, 512);
+        const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
 
-        //call model (might env this)
+        // 3. Call new ensemble model (Kept your native fetch and environment variables!)
         const mlUrl = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
 
-        const mlResponse = await fetch(`${mlUrl}/predict`, {
+        const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
             method:'POST',
             headers:{
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({text: cleanText})
+            body: JSON.stringify({email_content: rawEmailString})
         });
 
         if (!mlResponse.ok) {
@@ -531,16 +530,19 @@ app.post('/api/scan', requireGoogleAuth, async(req, res) => {
         }
 
         const mlResult = await mlResponse.json();
+        const analysis = mlResult.combined_analysis;
 
+        // 4. Return exact format frontend expects, plus the new details for later
         res.json({
             id: emailId,
-            verdict: mlResult.prediction,
-            confidence: mlResult.confidence   
+            verdict: analysis.final_prediction,
+            confidence: analysis.total_score,
+            details: mlResult // Added for the Explainable AI box!
         });
     } catch (error) {
         console.error('Scan Error:', error.message);
         res.status(503).json({ error: "Scan Failed", details: error.message });
-}
+    }
 });
 
 //user profile
