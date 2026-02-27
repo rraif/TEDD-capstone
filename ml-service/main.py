@@ -23,6 +23,9 @@ except Exception as e:
 
 app = FastAPI()
 
+from genai.router import router as genai_router
+app.include_router(genai_router, prefix="/gen", tags=["GenAI"])
+
 class TextInput(BaseModel):
     text: str
 
