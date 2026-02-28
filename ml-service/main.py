@@ -90,17 +90,25 @@ def parse_raw_email(raw_email: str) -> Dict:
                 text = a.get_text(strip=True)
                 urls.append(href)
                 
-                if re.search(r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}', text):
-                    try:
-                        clean_text = text.strip()
-                        if not clean_text.startswith(('http://', 'https://')):
-                            clean_text = "http://" + clean_text
-                            
-                        text_domain = urlparse(clean_text).netloc.replace("www.", "").lower()
-                        href_domain = urlparse(href).netloc.replace("www.", "").lower()
+                clean_text = text.strip().lower()
+                
+                if ' ' not in clean_text and '.' in clean_text:
+                    try: 
+                        ext_text = tldextract.extract(clean_text)
+                        ext_href = tldextract.extract(href)
                         
-                        if text_domain and href_domain and text_domain != href_domain:
-                            is_spoofed = True
+                        # 1. Verify the visible text is a real domain
+                        if ext_text.domain and ext_text.suffix:
+                            text_base = f"{ext_text.domain}.{ext_text.suffix}"
+                            
+                            # 2. Verify the hidden link actually contains a domain or IP address
+                            if ext_href.domain: 
+                                href_base = f"{ext_href.domain}.{ext_href.suffix}" if ext_href.suffix else ext_href.domain
+                                
+                                # 3. Compare them
+                                if text_base != href_base:
+                                    print(f"🚩 SPOOF CAUGHT: Visible Text '{text_base}' -> Hidden Link '{href_base}'")
+                                    is_spoofed = True
                     except Exception:
                         pass
             
@@ -129,6 +137,7 @@ def parse_raw_email(raw_email: str) -> Dict:
 def predict_text_bert(text: str) -> Dict:
     if not bert_model: return {"model": "BERT", "error": "Model not loaded"}
     try:
+        word_count = len(text.split())
         clean_text = " ".join(text.split())[:1000] 
         inputs = tokenizer(clean_text, return_tensors="pt", truncation=True, padding=True, max_length=512)
         with torch.no_grad():
@@ -142,7 +151,7 @@ def predict_text_bert(text: str) -> Dict:
         result = "Phishing" if predicted_class.item() == 1 else "Legitimate"
         raw_risk = confidence.item() if result == "Phishing" else (1.0 - confidence.item())
 
-        return {"model": "BERT", "prediction": result, "confidence": round(float(confidence.item()), 4), "raw_risk": float(raw_risk)}
+        return {"model": "BERT", "prediction": result, "confidence": round(float(confidence.item()), 4), "raw_risk": float(raw_risk), "word_count": word_count}
     except Exception as e:
         return {"model": "BERT", "error": str(e)}
 
@@ -152,24 +161,10 @@ def predict_url_features(urls: List[str]) -> Dict:
         if not urls: return {"model": "URL", "prediction": "Legitimate", "confidence": 0.0, "raw_risk": 0.0}
 
         domain_counts = Counter([urlparse(u).netloc.lower() for u in urls])
+        unique_domains = len(set([urlparse(u).netloc.lower() for u in urls if urlparse(u).netloc]))
         all_results = []
         
-        TRUSTED_DOMAINS = {
-            'youtube.com', 'pwc.com.my', 'github.com', 'linkedin.com', 
-            'google.com', 'microsoft.com', 'tryhackme.com', 
-            'customeriomail.com', 'customer.io', 'discord.com', 
-            'twitter.com', 'instagram.com', 'facebook.com', 't.co',
-            'taylors.edu.my'
-        }
-        
         for url in urls:
-            ext = tldextract.extract(url)
-            registered_domain = ext.registered_domain.lower()
-            
-            # 🚀 FIX: Ignore malformed URLs (like http://) that lack a registered domain
-            if not registered_domain:
-                continue
-
             features_dict = URLFeatures(url).get_features()
             features_list = [list(features_dict.values())]
             
@@ -178,9 +173,8 @@ def predict_url_features(urls: List[str]) -> Dict:
             confidence = float(max(probabilities))
             risk = confidence if prediction == 1 else (1.0 - confidence)
 
-            if registered_domain in TRUSTED_DOMAINS:
-                risk = min(risk, 0.01) 
-            elif domain_counts[urlparse(url).netloc.lower()] >= 3:
+            # Frequency dampener
+            if domain_counts[urlparse(url).netloc.lower()] >= 3:
                 risk = risk * 0.4
             
             all_results.append(risk)
@@ -192,7 +186,15 @@ def predict_url_features(urls: List[str]) -> Dict:
         final_prediction = "Phishing" if max_risk >= 0.5 else "Legitimate"
         display_confidence = max_risk if final_prediction == "Phishing" else (1.0 - max_risk)
             
-        return {"model": "URL", "prediction": final_prediction, "confidence": round(float(display_confidence), 4), "raw_risk": max_risk, "urls_analyzed": len(urls)}
+        return {
+            "model": "URL", 
+            "prediction": final_prediction, 
+            "confidence": round(float(display_confidence), 4), 
+            "raw_risk": max_risk, 
+            "urls_analyzed": len(urls), 
+            "unique_domains": unique_domains,
+            "extracted_urls": urls
+        }
     except Exception as e:
         return {"model": "URL", "error": str(e)}
 
@@ -200,6 +202,8 @@ def predict_html_features(html_text: str) -> Dict:
     if not html_model: return {"model": "HTML", "error": "Model not loaded"}
     try:
         if not html_text.strip(): return {"model": "HTML", "prediction": "No HTML", "confidence": 0.0, "raw_risk": 0.0}
+        
+        tag_count = len(BeautifulSoup(html_text, "html.parser").find_all()) if html_text.strip() else 0
         features_dict = HTMLFeatures(html_text).get_features()
         prediction = html_model.predict([list(features_dict.values())])[0]
         confidence = float(max(html_model.predict_proba([list(features_dict.values())])[0]))
@@ -207,12 +211,12 @@ def predict_html_features(html_text: str) -> Dict:
         result = "Phishing" if int(prediction) == 1 else "Legitimate"
         raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
         
-        return {"model": "HTML", "prediction": result, "confidence": round(confidence, 4), "raw_risk": float(raw_risk)}
+        return {"model": "HTML", "prediction": result, "confidence": round(confidence, 4), "raw_risk": float(raw_risk), "html_tag_count": tag_count}
     except Exception as e:
         return {"model": "HTML", "error": str(e)}
 
 # ============================================================
-# CONFIDENCE-WEIGHTED ENSEMBLE SCORING
+# CONTEXT-AWARE ENSEMBLE SCORING (NO WHITELISTS)
 # ============================================================
 
 def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = False) -> Dict:
@@ -220,43 +224,100 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
     if not scores: return {"total_score": 0.0, "final_prediction": "Unable to predict"}
 
     models = ['URL', 'BERT', 'HTML']
-    risks = {}
-    confidences = {}
+    risks = {
+        'URL': scores.get('URL', {}).get('raw_risk', 0.0), 
+        'BERT': scores.get('BERT', {}).get('raw_risk', 0.5), 
+        'HTML': scores.get('HTML', {}).get('raw_risk', 0.0)
+    }
+    
+    base_weights = {'URL': 0.30, 'BERT': 0.50, 'HTML': 0.20}
+    dynamic_weights = base_weights.copy()
+
+    bert_muted = False
+    marketing_email = False
+
+    # EXTRACT METRICS
+    url_data = scores.get('URL', {})
+    url_count = url_data.get('urls_analyzed', 0)
+    unique_domains = url_data.get('unique_domains', 0)
+    word_count = scores.get('BERT', {}).get('word_count', 0)
+    html_tag_count = scores.get('HTML', {}).get('html_tag_count', 0)
+    url_list = url_data.get('extracted_urls', [])
 
     print("\n--- 📊 ENSEMBLE DATA LOG ---")
-    for m in models:
-        r = scores[m].get('raw_risk', 0.5) if m in scores else 0.5
-        risks[m] = r
-        conf = abs(r - 0.5) * 1.2 
-        confidences[m] = conf
-        print(f"[{m}] Risk: {r:.4f} | Conf: {conf:.4f}")
+    print(f"📝 META | Words: {word_count} | URLs: {url_count} (Unique Domains: {unique_domains}) | HTML Tags: {html_tag_count}")
+    
+    if url_list:
+        print(f"🔗 URLs Analyzed: {url_list}")
 
-    # Rebalanced base weights to allow BERT a stronger voice in clear-cut cases
-    base_weights = {'URL': 0.45, 'BERT': 0.35, 'HTML': 0.20}
-    dynamic_weights = {}
-    total_dynamic_weight = 0.0
+    # 1️⃣ APPLY WEIGHT HEURISTICS FIRST
+    
+    # HEURISTIC 1: The "Tracker Override"
+    if risks['BERT'] < 0.25 and risks['URL'] > 0.60:
+        print("🛡️ HEURISTIC: Text is very safe. Muting URL risk (Likely Tracker behavior).")
+        dynamic_weights['URL'] = dynamic_weights['URL'] * 0.2  
 
-    for m in models:
-        w = base_weights[m] * (confidences[m] + 0.1) 
-        
-        # Dampener: Mutes BERT's weight ONLY if the URL is verified safe
-        if m == 'BERT':
-            url_r = risks.get('URL', 0.5)
-            w = w * (0.1 + (0.9 * url_r))
-            
-        dynamic_weights[m] = w
-        total_dynamic_weight += w
+    # HEURISTIC 3: The "Financial Newsletter" Override
+    if risks['URL'] < 0.50 and risks['HTML'] < 0.60 and risks['BERT'] > 0.80:
+        print("🛡️ HEURISTIC: Safe Links + Clean HTML. Muting BERT's financial/marketing panic.")
+        dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1 
+        dynamic_weights['URL'] = dynamic_weights['URL'] * 1.5
+        bert_muted = True
 
+    # HEURISTIC 4: Marketing Bloat (Apparel, platforms, etc.)
+    if url_count >= 8 and html_tag_count > 50 and risks['URL'] < 0.60:
+        print(f"🛡️ HEURISTIC: High link volume ({url_count}) + Neutral URLs. Muting HTML/BERT panic.")
+        dynamic_weights['HTML'] = dynamic_weights['HTML'] * 0.1 
+        dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1
+        bert_muted = True
+        marketing_email = True
+
+    # HEURISTIC 5: The "Policy Novel" (Long-form corporate/legal comms)
+    if word_count > 300 and url_count <= 3 and risks['BERT'] > 0.60:
+        print("🛡️ HEURISTIC: Long-form text with few links. Muting BERT's policy/legal panic.")
+        dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.5 
+        bert_muted = True
+
+    # HEURISTIC 6: The "Enterprise Unsubscribe/API" Pattern
+    url_str = url_list[0].lower() if url_list else ""
+    enterprise_markers = ['/unsubscribe', '/api/', '/v1/', '/v2/', '/preferences', '/opt-out']
+    is_enterprise_path = any(marker in url_str for marker in enterprise_markers)
+
+    if url_count <= 2 and is_enterprise_path and risks['HTML'] < 0.25:
+        print("🛡️ HEURISTIC: Enterprise API/Unsubscribe path detected. Muting URL/BERT panic.")
+        dynamic_weights['URL'] = dynamic_weights['URL'] * 0.2
+        dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.2
+        bert_muted = True
+
+    # 🧠 DYNAMIC HEURISTIC 7: The "Social Matrix" Risk Anchor
+    if url_count >= 10 and unique_domains >= 5 and html_tag_count > 100:
+        print(f"🛡️ HEURISTIC: Social Matrix ({unique_domains} domains) detected. Anchoring URL risk.")
+        risks['URL'] = min(risks['URL'], 0.20) 
+        dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.05 
+        dynamic_weights['HTML'] = dynamic_weights['HTML'] * 0.05 
+        bert_muted = True
+        marketing_email = True
+
+    # 2️⃣ CALCULATE THE MATH
+    total_dynamic_weight = sum(dynamic_weights.values())
     final_risk = 0.0
+    
     for m in models:
         normalized_w = dynamic_weights[m] / total_dynamic_weight
-        contribution = risks[m] * normalized_w
-        final_risk += contribution
-        print(f"[{m}] Weight: {normalized_w:.4f} | Impact: {contribution:.4f}")
+        impact = risks[m] * normalized_w
+        final_risk += impact
+        print(f"[{m}] Risk: {risks[m]:.4f} | Weight: {normalized_w:.4f} | Impact: {impact:.4f}")
 
-    if is_spoofed:
-        print(f"SPOOF_FLAG: TRUE | Pre-Adj Risk: {final_risk:.4f}")
-        final_risk = final_risk + (1.0 - final_risk) * 0.90 
+    # 3️⃣ APPLY POST-MATH PENALTIES (Spoofing)
+    if is_spoofed and not marketing_email:
+        if risks['BERT'] > 0.40 and not bert_muted:
+            print(f"🚩 SPOOF_FLAG: TRUE | BERT Suspicious -> Applying MAX 90% Penalty")
+            final_risk = final_risk + (1.0 - final_risk) * 0.90 
+        else:
+            print(f"⚠️ SPOOF_FLAG: TRUE | BERT Muted/Safe -> Applying MINOR 15% Tracker Penalty")
+            final_risk = final_risk + (1.0 - final_risk) * 0.15
+    elif is_spoofed and marketing_email:
+        print("🛡️ SPOOF_FLAG: IGNORED | High-Volume Marketing Email Detected")
 
     print(f"RESULT_RISK: {final_risk:.4f}")
     print("---------------------------\n")

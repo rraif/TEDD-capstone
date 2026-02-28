@@ -317,7 +317,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                     : 'bg-green-950/40 border-green-500/50 text-green-200'
                 }`}>
                   <h3 className="font-bold text-xl mb-3">
-                    {scanResult.verdict === 'Phishing' ? "Phishing Detected" : "Looks Safe"}
+                    {scanResult.verdict === 'Phishing' ? "Phishing Detected" : "Nothing Detected"}
                   </h3>
                   <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
                     Confidence: {(scanResult.confidence * 100).toFixed(1)}%
