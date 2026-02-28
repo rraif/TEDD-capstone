@@ -288,7 +288,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
             </div>
           </div>
 
-          {/* RIGHT COLUMN: The AI Security Inspector Panel */}
+{/* RIGHT COLUMN: The AI Security Inspector Panel */}
           <div className="w-full xl:w-80 shrink-0 sticky top-20">
             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4 border-b border-slate-800/80 pb-2">
               Security Analysis
@@ -296,50 +296,80 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
 
             {isScanning && (
               <div className="flex flex-col items-center justify-center gap-5 text-blue-400 bg-blue-900/20 p-8 rounded-lg border border-blue-500/30 text-center">
-                {/* Replaced the hourglass emoji with a professional SVG spinner */}
                 <svg className="animate-spin h-10 w-10 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 <div className="space-y-2 animate-pulse">
                   <div className="font-bold">Scanning Payload</div>
-                  <div className="text-xs opacity-70">Running BERT Model...</div>
+                  <div className="text-xs opacity-70">Running Context Engine...</div>
                 </div>
               </div>
             )}
 
-            {!isScanning && scanResult && (
-              <>
-                {/* 1. The Main Verdict Card (Emojis Removed) */}
-                <div className={`flex flex-col items-center p-6 rounded-lg border shadow-lg text-center ${
-                  scanResult.verdict === 'Phishing' 
-                    ? 'bg-red-950/40 border-red-500/50 text-red-200' 
-                    : 'bg-green-950/40 border-green-500/50 text-green-200'
-                }`}>
-                  <h3 className="font-bold text-xl mb-3">
-                    {scanResult.verdict === 'Phishing' ? "Phishing Detected" : "Nothing Detected"}
-                  </h3>
-                  <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
-                    Confidence: {(scanResult.confidence * 100).toFixed(1)}%
-                  </div>
-                </div>
+            {!isScanning && scanResult && (() => {
+              // 🚀 BULLETPROOF LOGIC (Bypasses the Node.js Middleware issue)
+              // The Express server drops "threat_level", so we must mathematically 
+              // reconstruct the 3 tiers using ONLY "verdict" and "confidence".
+              
+              let status = 'Safe';
+              const isPhishing = scanResult.verdict === 'Phishing';
+              const conf = scanResult.confidence || 0;
+              
+              if (isPhishing && conf >= 0.70) {
+                status = 'Phishing';   // Raw risk was 0.70 or higher
+              } else if (isPhishing && conf < 0.70) {
+                status = 'Suspicious'; // Raw risk was between 0.50 and 0.69
+              } else if (!isPhishing && conf <= 0.60) {
+                status = 'Suspicious'; // Raw risk was between 0.40 and 0.49
+              }
 
-                {/* 2. The Explainable AI Placeholder Box (Emojis Removed) */}
-                {scanResult.verdict === 'Phishing' && (
-                  <div className="mt-4 bg-[#020617] border border-slate-800 rounded-lg p-5 shadow-lg relative overflow-hidden">
-                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 to-blue-500 opacity-50"></div>
+              return (
+                <>
+                  {/* 1. The Main Verdict Card */}
+                  <div className={`flex flex-col items-center p-6 rounded-lg border shadow-lg text-center ${
+                    status === 'Phishing' 
+                      ? 'bg-red-950/40 border-red-500/50 text-red-200' 
+                      : status === 'Suspicious'
+                      ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+                      : 'bg-green-950/40 border-green-500/50 text-green-200'
+                  }`}>
+                    <h3 className="font-bold text-xl mb-3">
+                      {status === 'Phishing' ? "Phishing Detected" 
+                        : status === 'Suspicious' ? "Suspicious Activity" 
+                        : "Nothing Detected"}
+                    </h3>
                     
-                    <div className="mb-3 text-purple-400 font-bold text-xs uppercase tracking-wider mt-1">
-                      Phishing Explanation
+                    {/* UI DISPLAYS THE CONFIDENCE SCORE */}
+                    <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
+                      Confidence: {(conf * 100).toFixed(1)}%
                     </div>
-                    
-                    <p className="text-slate-400 text-sm leading-relaxed">
-                      Explanation Goes here
-                    </p>
                   </div>
-                )}
-              </>
-            )}
+
+                  {/* 2. The Explainable AI Box */}
+                  {(status === 'Phishing' || status === 'Suspicious') && (
+                    <div className="mt-4 bg-[#020617] border border-slate-800 rounded-lg p-5 shadow-lg relative overflow-hidden">
+                      <div className={`absolute top-0 left-0 right-0 h-1 opacity-50 bg-gradient-to-r ${
+                        status === 'Phishing' ? 'from-red-500 to-purple-500' : 'from-amber-500 to-yellow-500'
+                      }`}></div>
+                      
+                      <div className={`mb-3 font-bold text-xs uppercase tracking-wider mt-1 ${
+                        status === 'Phishing' ? 'text-purple-400' : 'text-amber-400'
+                      }`}>
+                        {status === 'Phishing' ? 'Phishing Explanation' : 'Why is this Suspicious?'}
+                      </div>
+                      
+                      <p className="text-slate-400 text-sm leading-relaxed">
+                        {status === 'Suspicious' 
+                          ? "Suspicious Explanation goes here"
+                          : "Phishing explanation goes here"
+                        }
+                      </p>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

@@ -327,6 +327,7 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
 
     return {
         "total_score": round(float(display_confidence), 4),
+        "threat_level": round(float(final_risk), 4), # 🚀 ADD THIS LINE
         "final_prediction": final_prediction,
         "active_gate": "Ensemble" if not is_spoofed else "Spoof_Penalty",
         "raw_risk_data": {m: round(risks[m], 4) for m in models}
