@@ -22,10 +22,14 @@ const cors = require('cors');
 const {google} = require('googleapis'); 
 const DOMPurify = require('isomorphic-dompurify');
 const {encrypt, decrypt} = require('./crypto.js');
+const crypto = require('crypto');
 
 const app = express(); 
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
+
+const MAX_EMAILS = 25;       
+const FETCH_CHUNK_SIZE = 45; // How many to grab from Google per API call
 
 const generateTeamCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -50,29 +54,77 @@ const getGmailClient = (user) => {
     
 };
 
-const getEmailBody = (payload) =>{
-    //if email body is just there, give it
+const getEmailBody = async (payload, gmail = null, messageId = null) => {
+    let htmlBody = '';
+    let plainBody = '';
+    let inlineImages = {}; 
+
+    // 🚀 2. Made the recursive helper async
+    const extractParts = async (part) => {
+        if (part.mimeType === 'text/html' && part.body && part.body.data) {
+            htmlBody = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        } 
+        else if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+            plainBody = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        }
+        // 🚀 3. THE FIX: Look for attachmentId if data is missing!
+        else if (part.headers && part.body && part.mimeType.startsWith('image/')) {
+            const cidHeader = part.headers.find(h => h.name.toLowerCase() === 'content-id');
+            if (cidHeader) {
+                const cid = cidHeader.value.replace(/[<>]/g, '');
+                let base64Data = null;
+                
+                // If it's a tiny image, Google gives us the data directly
+                if (part.body.data) {
+                    base64Data = part.body.data;
+                } 
+                // If it's a normal/large image, we have to fetch it using the attachmentId
+                else if (part.body.attachmentId && gmail && messageId) {
+                    try {
+                        const attachment = await gmail.users.messages.attachments.get({
+                            userId: 'me',
+                            messageId: messageId,
+                            id: part.body.attachmentId
+                        });
+                        base64Data = attachment.data.data;
+                    } catch (err) {
+                        console.error('Failed to fetch image attachment:', err);
+                    }
+                }
+                
+                if (base64Data) {
+                    const cleanBase64 = base64Data.replace(/-/g, '+').replace(/_/g, '/');
+                    inlineImages[cid] = `data:${part.mimeType};base64,${cleanBase64}`;
+                }
+            }
+        }
+
+        // 🚀 4. Await the recursive digger
+        if (part.parts) {
+            for (const subPart of part.parts) {
+                await extractParts(subPart); 
+            }
+        }
+    };
+
     if (payload.body && payload.body.data) {
         return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
     }
 
-    //if email body is multipart (text, HTML, pics, attachments, etc.), look inside parts
-    if(payload.parts){
-        for(const part of payload.parts){
-            if(part.mimeType === 'text/plain' || part.mimeType === 'text/html'){
-                if(part.body && part.body.data) {
-                    return Buffer.from(part.body.data, 'base64url').toString('utf-8');
-                }
-            }
+    // 🚀 5. Await the main extraction
+    await extractParts(payload);
 
-            if(part.parts){
-                const nestedBody = getEmailBody(part);
-                if(nestedBody) return nestedBody;
-            }
+    let finalBody = htmlBody || plainBody || 'No readable text found';
+
+    if (Object.keys(inlineImages).length > 0 && finalBody !== 'No readable text found') {
+        for (const [cid, dataUri] of Object.entries(inlineImages)) {
+            const cidRegex = new RegExp(`cid:${cid}`, 'g');
+            finalBody = finalBody.replace(cidRegex, dataUri);
         }
     }
-    return 'No readable text found';
-}
+    
+    return finalBody;
+};
 
 const requireGoogleAuth = (req, res, next) => {
     if(!req.isAuthenticated()){
@@ -241,46 +293,63 @@ app.get('/logout', (req, res, next) => {
 async allows us to use "await" which pauses execution while google fetches email data
 async just basically means this is a function that might take a while*/
 app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
-    //if the user is valid,
-    try {
-        const gmail = getGmailClient(req.user);
+try {
+        const googleId = req.user.google_id;
+        
+        // 1. Fetch hidden IDs
+        const hiddenQuery = await db.query('SELECT email_id FROM hidden_emails WHERE google_id = $1', [googleId]);
+        const hiddenIds = hiddenQuery.rows.map(row => row.email_id);
 
-        /*this asks google to send the latest 10 emails of the current logged in accoun
-        the await means dont do anything until google answers*/
-        const listResponse = await gmail.users.messages.list({
-            userId:'me',
-            maxResults: 10 
-        });
+        // Setup Gmail Client
+        const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+        oauth2Client.setCredentials({ refresh_token: req.user.refreshToken });
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        //this makes an array of message IDs (ticket that links to an email)
-        const messages = listResponse.data.messages;
+        // 2. Loop through Gmail pages until we find 10 visible emails
+        let visibleMessages = [];
+        let pageToken = undefined;
 
-        //if no emails, return json of NOTHING
-        if (!messages || messages.length === 0) {
-            return res.json([]);
+        while (visibleMessages.length < MAX_EMAILS) {
+            const listResponse = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: FETCH_CHUNK_SIZE, // Fetch in chunks of 20 to be efficient
+                pageToken: pageToken
+            });
+
+            const messages = listResponse.data.messages || [];
+            if (messages.length === 0) break; // We reached the absolute end of their inbox
+
+            // Filter this chunk
+            const newlyVisible = messages.filter(msg => !hiddenIds.includes(msg.id));
+            visibleMessages = visibleMessages.concat(newlyVisible);
+
+            pageToken = listResponse.data.nextPageToken;
+            if (!pageToken) break; // No more pages to fetch
         }
 
-        //goes to where you get the emails
-        const emailDetails = await Promise.all(//promise makes it run in parallel
-            messages.map(async (msg) => {
+        // 3. Slice the array to guarantee EXACTLY 10 emails (in case the last chunk pushed us to 12 or 15)
+        visibleMessages = visibleMessages.slice(0, MAX_EMAILS);
 
-                //gets the raw email data
+        if (visibleMessages.length === 0) {
+            return res.json({ emails: [] });
+        }
+
+        // 4. Fetch the actual content for our 10 confirmed visible emails
+        const emailDetails = await Promise.all(
+            visibleMessages.map(async (msg) => {
                 const detail = await gmail.users.messages.get({
                     userId: 'me',
                     id: msg.id,
-                    format: 'full'
+                    format: 'metadata'
                 });
             
-                //cleans the email data to get individual elements
                 const headers = detail.data.payload.headers;
                 const subject = DOMPurify.sanitize(headers.find(h => h.name === 'Subject')?.value || '(No Subject)');
                 const from = DOMPurify.sanitize(headers.find(h => h.name === 'From')?.value || '(Unknown)');
                 const snippet = DOMPurify.sanitize(detail.data.snippet);
                 const date = headers.find(h => h.name === 'Date')?.value;
                 
-
-                //"readies" the cleaned data
-                return{
+                return {
                     id: msg.id,
                     threadId: msg.threadId,
                     subject: subject,
@@ -291,47 +360,134 @@ app.get('/api/emails', requireGoogleAuth, async (req, res) =>{
             })
         );
 
-
-        //presents or serves the cleaned email data to the frontend
-        res.json(emailDetails);
-
+        res.json({ emails: emailDetails });
     } catch (error) {
         console.error('Gmail API Error:', error);
         res.status(401).json({error: 'Token expired or invalid'});
     }
 });
 
-app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
+app.post('/api/emails/hide', requireGoogleAuth, async (req, res) => {
+    const {emailId} = req.body;
+    const googleId = req.user.google_id;
+
+    if(!emailId) return res.status(400).json({error: 'email id required'});
 
     try {
+        await db.query(
+        'INSERT INTO hidden_emails (google_id, email_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', 
+        [googleId, emailId]
+        );
+        res.json({success: true});
+    } catch (err) {
+        console.error('error hiding email:', err);
+        res.status(500).json({error: 'server error while hiding email'});
+    }
+});
+
+app.get('/api/emails/hidden', requireGoogleAuth, async (req, res) => {
+    const googleId = req.user.google_id;
+
+    try{
+        const hiddenQuery = await db.query('SELECT email_id FROM hidden_emails WHERE google_id = $1', [googleId]);
+        const hiddenIds = hiddenQuery.rows.map(row => row.email_id);
+
+        if (hiddenIds.length === 0){
+            return res.json({success: true, emails: []});
+        }
+
+        const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+        oauth2Client.setCredentials({refresh_token: req.user.refreshToken});
+        const gmail = google.gmail({version: 'v1', auth: oauth2Client});
+
+        const emailDetails =  [];
+
+        for (const id of hiddenIds){
+            try{
+                const mail = await gmail.users.messages.get({
+                    userId: 'me',
+                    id: id,
+                    format: 'metadata',
+                    metadataHeaders: ['Subject', 'From', 'Date']      
+                });
+
+                //purify?
+                const headers = mail.data.payload.headers;
+                const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject';
+                const from = headers.find(h => h.name === 'From')?.value || 'Unknown Sender';
+                const date = headers.find(h => h.name === 'Date')?.value || '';
+
+                emailDetails.push({
+                    id: mail.data.id, 
+                    subject, 
+                    from, 
+                    date, 
+                    snippet: mail.data.snippet }
+                );
+            } catch (gmailErr) {
+                console.error(`cannot fetch hidden email ${id}:`, gmailErr.message);
+            }
+        }
+           res.json({success: true, emails: emailDetails});
+    } catch (err) {
+        console.error('Error fetching hidden emails:', err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+app.post('/api/emails/unhide', requireGoogleAuth, async (req, res) => {
+    const { emailId } = req.body;
+    const googleId = req.user.google_id;
+
+    if (!emailId) return res.status(400).json({ error: "Email ID is required" });
+
+    try {
+        await db.query(
+            'DELETE FROM hidden_emails WHERE google_id = $1 AND email_id = $2',
+            [googleId, emailId]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error unhiding email:', err);
+        res.status(500).json({ error: "Server error while unhiding email" });
+    }
+});
+
+
+app.get('/api/emails/:id', requireGoogleAuth, async (req, res) => {
+try {
         const gmail = getGmailClient(req.user);
 
-        const response = await gmail.users.messages.get({
-            userId: 'me',
-            id: req.params.id,
-            format:'full'
-        });
+        // 🚀 1. Fetch BOTH the parsed 'full' data and the 'raw' MIME data concurrently
+        const [response, rawResponse] = await Promise.all([
+            gmail.users.messages.get({ userId: 'me', id: req.params.id, format: 'full' }),
+            gmail.users.messages.get({ userId: 'me', id: req.params.id, format: 'raw' })
+        ]);
 
         const payload = response.data.payload;
         const headers = payload.headers;
-        const rawBody = getEmailBody(payload);
+        
+        // Ensure you are using the async getEmailBody we fixed earlier!
+        const rawBody = await getEmailBody(payload, gmail, req.params.id);
+
+        // 🚀 2. Decode the raw email and extract the MIME boundaries
+        const rawEmailString = Buffer.from(rawResponse.data.raw, 'base64url').toString('utf-8');
+        const splitIndex = rawEmailString.indexOf('\r\n\r\n'); // Headers end at the first double-space
+        const rawMimeBody = splitIndex !== -1 ? rawEmailString.substring(splitIndex + 4) : 'No raw body found.';
 
         const cleanData = {
             id: response.data.id,
-      
             subject: DOMPurify.sanitize(headers.find(h => h.name === 'Subject')?.value || '(No Subject)'),
             from: DOMPurify.sanitize(headers.find(h => h.name === 'From')?.value || '(Unknown)'),
             to: DOMPurify.sanitize(headers.find(h => h.name === 'To')?.value || '(Unknown)'),
             date: headers.find(h => h.name === 'Date')?.value, 
-            
-            // CRITICAL: Sanitize the HTML Body
-            // This strips out <script> tags but keeps <b>, <p>, etc.
             body: DOMPurify.sanitize(rawBody)
         };
 
         res.json({
             basic: cleanData,
-            headers: headers    
+            headers: headers,
+            rawMimeBody: rawMimeBody // 🚀 3. Send the raw MIME text to the frontend
         });
 
     } catch (error) {
@@ -356,7 +512,7 @@ app.post('/api/scan', requireGoogleAuth, async(req, res) => {
 
         //clean body for the model
         const payload = response.data.payload;
-        let rawBody = getEmailBody(payload); 
+        let rawBody = await getEmailBody(payload, gmail, req.params.id); 
         const cleanText = rawBody.replace(/\s+/g, ' ').trim().substring(0, 512);
 
         //call model (might env this)
@@ -411,23 +567,32 @@ app.post('/api/teams/create', requireGoogleAuth, async(req, res) =>{
     const {teamName} = req.body;
     const googleId = req.user.google_id;
 
-    if(!teamName) return res.status(400).json({error: "team name is required"});
+    const cleanTeamName = DOMPurify.sanitize(teamName);
+
+    if(!cleanTeamName) return res.status(400).json({error: "team name is required"});
 
     try {
         let isCodeUnique = false;
         let newCode = '';
+        let hashedCode = '';
 
         //generate code and check code collision
         while (!isCodeUnique) {
             newCode = generateTeamCode();
-            const check = await db.query('SELECT * FROM teams WHERE join_code =$1', [newCode]);
+
+            hashedCode = crypto.createHash('sha256').update(newCode).digest('hex');
+
+            const check = await db.query('SELECT * FROM teams WHERE hashed_join_code =$1', [hashedCode]);
             if (check.rows.length === 0) isCodeUnique = true;
         }
 
+
+        const encryptedCode = encrypt(newCode);
+
         //create team
         const newTeam = await db.query(
-            `INSERT INTO teams (team_name, join_code, created_by) VALUES ($1, $2, $3) RETURNING *`,
-            [teamName, newCode, googleId]
+            `INSERT INTO teams (team_name, hashed_join_code, encrypted_join_code, created_by) VALUES ($1, $2, $3, $4) RETURNING *`,
+            [cleanTeamName, hashedCode, encryptedCode, googleId]
         );
         const teamId = newTeam.rows[0].team_id;
 
@@ -437,7 +602,10 @@ app.post('/api/teams/create', requireGoogleAuth, async(req, res) =>{
             [teamId, googleId]
         );
 
-        res.json({success: true, team: newTeam.rows[0]});
+        const teamResponse = newTeam.rows[0];
+        teamResponse.join_code = newCode;
+
+        res.json({success: true, team: teamResponse});
     }catch (err) {
         console.error('Create team error:', err);
         res.status(500).json({error: 'failed to create team'});
@@ -451,8 +619,11 @@ app.post('/api/teams/join', requireGoogleAuth, async(req, res) => {
 
     if (!joinCode) return res.status(400).json({error: 'join code required'});
 
+    const cleanJoinCode = DOMPurify.sanitize(joinCode.toUpperCase());
+
     try{
-        const teamResult = await db.query('SELECT * FROM teams WHERE join_code = $1', [joinCode.toUpperCase()]);
+        const hashedInput = crypto.createHash('sha256').update(cleanJoinCode).digest('hex');
+        const teamResult = await db.query('SELECT * FROM teams WHERE hashed_join_code = $1', [hashedInput]);
 
         if (teamResult.rows.length === 0){
             return res.status(404).json({error: 'invalid team code'});
@@ -480,6 +651,15 @@ app.get('/api/teams/current', requireGoogleAuth, async (req, res) =>{
 
         const teamRes = await db.query('SELECT * FROM teams WHERE team_id = $1', [req.user.team_id]);
         if (teamRes.rows.length === 0) return res.status(404).json({error: "team not found"});
+
+        const teamData = teamRes.rows[0];
+
+        try{
+            teamData.join_code = decrypt(teamData.encrypted_join_code);
+        } catch(decryptErr){
+            console.error("Decryption failed", decryptErr);
+            teamData.join_code = 'error_decrypting';
+        }
 
         const membersRes = await db.query(
             'SELECT user_id, display_name, email, user_score, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',

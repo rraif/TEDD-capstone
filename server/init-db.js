@@ -1,6 +1,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const db = require('./database.js');
+const { create } = require('domain');
 
 
 async function initDatabase() {
@@ -37,15 +38,26 @@ async function initDatabase() {
         CREATE TABLE IF NOT EXISTS teams (
         team_id SERIAL PRIMARY KEY,
         team_name VARCHAR(255) NOT NULL,
-        join_code VARCHAR(6) UNIQUE NOT NULL,
+        hashed_join_code VARCHAR(64) UNIQUE NOT NULL,
+        encrypted_join_code TEXT NOT NULL,           
         created_by VARCHAR(255) NOT NULL, -- google_id of creator
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     `;
 
+    const createHiddenEmailsTable = `
+        CREATE TABLE IF NOT EXISTS hidden_emails (
+        google_id VARCHAR(255) NOT NULL,
+        email_id VARCHAR(255) NOT NULL,
+        hidden_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (google_id, email_id) -- Prevents adding the same email twice
+  );
+    `;
+
     await db.query(createUsersTable);
     await db.query(createSessionsTable);
     await db.query(createTeamsTable);
+    await db.query(createHiddenEmailsTable);
     
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(team_id);`);
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_team_admin BOOLEAN DEFAULT FALSE;`);
