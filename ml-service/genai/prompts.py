@@ -56,6 +56,10 @@ Generate ONE email for:
 {DIFFICULTY_RULES}
 
 {OUTPUT_SCHEMA_REMINDER}
+- email_id MUST be a string like "email_ab12cd34" (NOT a number).
+- ground_truth MUST be the string "phishing" or "benign" (NOT 0/1).
+- model_version MUST be a string like "llama3-local" (NOT a number).
+- prompt_version MUST be a string like "v1.0" (NOT a number).
 
 JSON ONLY.
 """.strip()

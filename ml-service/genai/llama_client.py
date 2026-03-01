@@ -1,23 +1,33 @@
 import httpx
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3"
+MODEL_NAME = "llama3:latest"
+
 
 async def call_ollama(prompt: str) -> str:
     """
     Calls local Ollama LLaMA model and returns raw text output.
+    Increased timeout to handle first-time model warmup.
     """
-    async with httpx.AsyncClient(timeout=60.0) as client:
+
+    timeout = httpx.Timeout(300.0)  # 5 minutes
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             OLLAMA_URL,
             json={
                 "model": MODEL_NAME,
                 "prompt": prompt,
-                "stream": False
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "num_predict": 450
+                }
             }
         )
 
-        response.raise_for_status()
-        data = response.json()
+        if response.status_code != 200:
+            raise RuntimeError(f"Ollama error {response.status_code}: {response.text}")
 
+        data = response.json()
         return data.get("response", "")

@@ -11,15 +11,17 @@ logging.basicConfig(level=logging.INFO)
 MODEL_PATH = "./tedd_bert_final" 
 
 
+tokenizer = None
+model = None
+
 try:
     print(f"Loading model from {MODEL_PATH}...")
     tokenizer = BertTokenizer.from_pretrained(MODEL_PATH)
     model = BertForSequenceClassification.from_pretrained(MODEL_PATH)
-    model.eval() # Set to evaluation mode (faster)
-    print("✅ Model loaded successfully!")
+    model.eval()
+    print("Model loaded successfully!")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
-    print("Did you unzip the folder? Is the path correct?")
+    print(f"⚠️ Model failed to load (continuing without BERT): {e}")
 
 app = FastAPI()
 
