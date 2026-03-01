@@ -547,9 +547,15 @@ const {emailId} = req.body;
 
 //user profile
 app.get('/api/current-user', requireGoogleAuth, async (req, res) => {
-    try{
+    try {
+        // 🚀 Modified to JOIN the teams table and grab team_name
         const userQuery = await db.query(
-            'SELECT user_id, google_id, email, display_name, user_score, title, team_id, is_team_admin FROM users WHERE google_id = $1',
+            `SELECT u.user_id, u.google_id, u.email, u.display_name, 
+                    u.user_score, u.survival_streak, u.title, 
+                    u.team_id, u.is_team_admin, t.team_name 
+             FROM users u 
+             LEFT JOIN teams t ON u.team_id = t.team_id 
+             WHERE u.google_id = $1`,
             [req.user.google_id]
         );
     
@@ -664,7 +670,7 @@ app.get('/api/teams/current', requireGoogleAuth, async (req, res) =>{
         }
 
         const membersRes = await db.query(
-            'SELECT user_id, display_name, email, user_score, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',
+            'SELECT user_id, display_name, email, user_score, survival_streak, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',
             [req.user.team_id]
         );
 
