@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from transformers import BertForSequenceClassification, BertTokenizer
 import torch
@@ -15,12 +15,15 @@ from urllib.parse import urlparse
 from typing import List, Dict
 from features import HTMLFeatures, URLFeatures
 from collections import Counter
+from dotenv import load_dotenv
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 BERT_MODEL_PATH = "./tedd_bert_final"
 URL_MODEL_PATH = "./URLClassifier.joblib"
 HTML_MODEL_PATH = "./HTMLClassifier.joblib"
+EXPECTED_KEY = os.environ["INTERNAL_API_KEY"]
 
 # Load BERT Model
 try:
@@ -338,7 +341,9 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
 # ============================================================
 
 @app.post("/parse-and-predict")
-async def parse_and_predict_endpoint(raw_email: RawEmailInput):
+async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = Header(None)):
+    if x_api_key != EXPECTED_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized internal request")
     try:
         parsed_email = parse_raw_email(raw_email.email_content)
         if parsed_email["parsing_status"] == "error":
