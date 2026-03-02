@@ -529,7 +529,8 @@ const {emailId} = req.body;
         const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
             method:'POST',
             headers:{
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.INTERNAL_API_KEY
             },
             body: JSON.stringify({email_content: rawEmailString})
         });
