@@ -41,7 +41,7 @@ export default function Header({}) {
         <img 
           src={teddLogo} 
           alt="TEDD Logo" 
-          className="h-8 w-auto scale-500 origin-left" 
+          className="h-8 w-auto scale-500 origin-left pointer-events-none" 
         />
       </div>
 
