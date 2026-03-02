@@ -9,4 +9,9 @@ export default defineConfig({
     tailwindcss()
     ],
   envDir: '../',
+  server: {
+    host: true,
+    port: 5173,
+    allowedHosts: true
+  }
 })
