@@ -8,10 +8,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 5000, //change before deploy
+    limit: 200, //change before deploy
     standardHeaders: true, 
     legacyHeaders: false,
-    message: "Too many requests, try again later"
+    message: "Too many requests from this IP, try again later"
 });
 
 const passport = require('passport');
@@ -138,7 +138,15 @@ const requireGoogleAuth = (req, res, next) => {
 
 //use helmet quite literally just "adds security"
 app.use(helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"], // Required for React/Vite
+        styleSrc: ["'self'", "'unsafe-inline'"], 
+        imgSrc: ["'self'", "data:", "https:"],    // Allows inline base64 email images
+        connectSrc: ["'self'", process.env.CLIENT_URL], // Allows API calls
+      },
+    }
 }));
 
 app.use(limiter);
@@ -163,6 +171,7 @@ app.use(session({
     cookie: {
         secure: process.env.NODE_ENV === 'production',  
         httpOnly: true,
+        sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000  // cookzie valid for 24 hours
     }
 }));
