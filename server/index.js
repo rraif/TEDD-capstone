@@ -8,10 +8,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 5000, //change before deploy
+    limit: 200, //change before deploy
     standardHeaders: true, 
     legacyHeaders: false,
-    message: "Too many requests, try again later"
+    message: "Too many requests from this IP, try again later"
 });
 
 const passport = require('passport');
@@ -138,7 +138,15 @@ const requireGoogleAuth = (req, res, next) => {
 
 //use helmet quite literally just "adds security"
 app.use(helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"], // Required for React/Vite
+        styleSrc: ["'self'", "'unsafe-inline'"], 
+        imgSrc: ["'self'", "data:", "https:"],    // Allows inline base64 email images
+        connectSrc: ["'self'", process.env.CLIENT_URL], // Allows API calls
+      },
+    }
 }));
 
 app.use(limiter);
@@ -163,6 +171,7 @@ app.use(session({
     cookie: {
         secure: process.env.NODE_ENV === 'production',  
         httpOnly: true,
+        sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000  // cookzie valid for 24 hours
     }
 }));
@@ -497,33 +506,32 @@ try {
 });
 
 app.post('/api/scan', requireGoogleAuth, async(req, res) => {
-    const {emailId} = req.body;
+const {emailId} = req.body;
 
+    // 1. Safety check (kept from your old code!)
     if (!emailId) return res.status(400).json({error: 'email ID required'});
 
     try{
-        //get email
         const gmail = getGmailClient(req.user);
+        
+        // 2. Get RAW email (Changed from 'full' to 'raw' because the new model needs the whole MIME string)
         const response = await gmail.users.messages.get({
             userId: 'me',
             id: emailId,
-            format: 'full'
+            format: 'raw'
         }); 
 
-        //clean body for the model
-        const payload = response.data.payload;
-        let rawBody = await getEmailBody(payload, gmail, req.params.id); 
-        const cleanText = rawBody.replace(/\s+/g, ' ').trim().substring(0, 512);
+        const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
 
-        //call model (might env this)
+        // 3. Call new ensemble model (Kept your native fetch and environment variables!)
         const mlUrl = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
 
-        const mlResponse = await fetch(`${mlUrl}/predict`, {
+        const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
             method:'POST',
             headers:{
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({text: cleanText})
+            body: JSON.stringify({email_content: rawEmailString})
         });
 
         if (!mlResponse.ok) {
@@ -531,23 +539,32 @@ app.post('/api/scan', requireGoogleAuth, async(req, res) => {
         }
 
         const mlResult = await mlResponse.json();
+        const analysis = mlResult.combined_analysis;
 
+        // 4. Return exact format frontend expects, plus the new details for later
         res.json({
             id: emailId,
-            verdict: mlResult.prediction,
-            confidence: mlResult.confidence   
+            verdict: analysis.final_prediction,
+            confidence: analysis.total_score,
+            details: mlResult // Added for the Explainable AI box!
         });
     } catch (error) {
         console.error('Scan Error:', error.message);
         res.status(503).json({ error: "Scan Failed", details: error.message });
-}
+    }
 });
 
 //user profile
 app.get('/api/current-user', requireGoogleAuth, async (req, res) => {
-    try{
+    try {
+        // 🚀 Modified to JOIN the teams table and grab team_name
         const userQuery = await db.query(
-            'SELECT user_id, google_id, email, display_name, user_score, title, team_id, is_team_admin FROM users WHERE google_id = $1',
+            `SELECT u.user_id, u.google_id, u.email, u.display_name, 
+                    u.user_score, u.survival_streak, u.title, 
+                    u.team_id, u.is_team_admin, t.team_name 
+             FROM users u 
+             LEFT JOIN teams t ON u.team_id = t.team_id 
+             WHERE u.google_id = $1`,
             [req.user.google_id]
         );
     
@@ -662,7 +679,7 @@ app.get('/api/teams/current', requireGoogleAuth, async (req, res) =>{
         }
 
         const membersRes = await db.query(
-            'SELECT user_id, display_name, email, user_score, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',
+            'SELECT user_id, display_name, email, user_score, survival_streak, title, is_team_admin FROM users WHERE team_id = $1 ORDER BY is_team_admin DESC, user_score DESC',
             [req.user.team_id]
         );
 
