@@ -7,7 +7,7 @@ export default function Admin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null); // <-- NEW: Error state!
   
-  const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiURL = import.meta.env.VITE_API_URL;
 
   useEffect(() => {
     fetchTeamData();

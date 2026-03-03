@@ -8,7 +8,7 @@ export default function Layout() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   
-  const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiURL = import.meta.env.VITE_API_URL;
 
   useEffect(() => {
     // 1. Fetch the user profile (including their team_id) when Layout loads

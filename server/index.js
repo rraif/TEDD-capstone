@@ -25,6 +25,7 @@ const {encrypt, decrypt} = require('./crypto.js');
 const crypto = require('crypto');
 
 const app = express(); 
+app.set('trust proxy', 1);
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 

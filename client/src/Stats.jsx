@@ -14,7 +14,7 @@ export default function Stats() {
   const [teamData, setTeamData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('score'); // 'score' or 'streak'
-  const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiURL = import.meta.env.VITE_API_URL;
 
   useEffect(() => {
     // Fetch BOTH personal stats and team roster concurrently

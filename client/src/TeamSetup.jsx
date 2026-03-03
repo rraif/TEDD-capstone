@@ -8,7 +8,7 @@ export default function TeamSetup({ onTeamSet }) {
   const [loading, setLoading] = useState(false);
   const [createdTeam, setCreatedTeam] = useState(null);
 
-  const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiURL = import.meta.env.VITE_API_URL;
 
   const handleCreate = async (e) => {
     e.preventDefault();
