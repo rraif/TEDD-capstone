@@ -1,7 +1,7 @@
 import httpx
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3:latest"
+MODEL_NAME = "llama3.2:3b"
 
 
 async def call_ollama(prompt: str) -> str:
@@ -21,7 +21,7 @@ async def call_ollama(prompt: str) -> str:
                 "stream": False,
                 "options": {
                     "temperature": 0.3,
-                    "num_predict": 450
+                    "num_predict": 280
                 }
             }
         )

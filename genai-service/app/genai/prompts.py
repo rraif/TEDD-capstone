@@ -1,65 +1,118 @@
-PROMPT_VERSION = "v1.0"
-
-SYSTEM_RULES = """
-You are generating TRAINING SIMULATION emails for an internal phishing awareness quiz.
-Return JSON only. No extra text.
-
-Safety constraints:
-- Do NOT use real brand names or impersonate real companies.
-- Use fictional company names and fictional sender domains.
-- All URLs MUST be within the domain *.tedd.training.
-- Do NOT include emotionally distressing themes (family emergencies, romance, threats, self-harm).
-- The email must end with: (This is a training simulation email.)
-"""
-
-OUTPUT_SCHEMA_REMINDER = """
-Return JSON with fields exactly:
-email_id, scenario_id, category, difficulty, subject, from_name, from_email, reply_to,
-body_text, links, attachments, intended_red_flags, ground_truth, model_version, prompt_version
-
-- links: list of objects {display_text, url}
-- attachments: list of objects {filename, filetype}
-- If category is "benign": intended_red_flags must be null.
-"""
-
-DIFFICULTY_RULES = """
-Difficulty rules:
-- 1-2: obvious red flags (urgency, generic greeting, suspicious sender/domain).
-- 3-4: more subtle but still detectable red flags.
-- 5: highly realistic but still fictional and safe, minimal red flags.
-"""
+PROMPT_VERSION = "v1.1"
 
 
-def build_email_prompt(
-    *,
-    scenario_id: str,
-    category: str,          # "phishing" or "benign"
-    difficulty: int,        # 1-5
-    language: str = "EN",   # "EN" or "BM"
-    tone: str = "formal"    # "formal" or "casual"
-) -> str:
-    """
-    Builds a fixed prompt for the model. The backend decides scenario/difficulty.
-    The model only generates content within the constraints.
-    """
+# ------------------------------------
+# Standard quiz prompt
+# ------------------------------------
+
+def build_email_prompt(item):
+
+    scenario = item["scenario_id"]
+    category = item["category"]
+    difficulty = item["difficulty"]
+    language = item.get("language", "EN")
+    tone = item.get("tone", "formal")
+
     return f"""
-{SYSTEM_RULES}
+You are generating a training email for a phishing awareness quiz.
 
-Task:
-Generate ONE email for:
-- scenario_id: {scenario_id}
-- category: {category}
-- difficulty: {difficulty}
-- language: {language}
-- tone: {tone}
+Scenario: {scenario}
+Category: {category}
+Difficulty: {difficulty}
+Language: {language}
+Tone: {tone}
 
-{DIFFICULTY_RULES}
+Return ONLY valid JSON matching this schema:
 
-{OUTPUT_SCHEMA_REMINDER}
-- email_id MUST be a string like "email_ab12cd34" (NOT a number).
-- ground_truth MUST be the string "phishing" or "benign" (NOT 0/1).
-- model_version MUST be a string like "llama3-local" (NOT a number).
-- prompt_version MUST be a string like "v1.0" (NOT a number).
+{{
+  "email_id": "",
+  "scenario_id": "{scenario}",
+  "category": "{category}",
+  "difficulty": {difficulty},
+  "subject": "",
+  "from_name": "",
+  "from_email": "",
+  "reply_to": "",
+  "headers": {{}},
+  "body_text": "",
+  "links": [
+    {{
+      "display_text": "",
+      "url": "https://tedd.training/example"
+    }}
+  ],
+  "attachments": [],
+  "intended_red_flags": [],
+  "ground_truth": "{category}",
+  "model_version": "llama3-local",
+  "prompt_version": "{PROMPT_VERSION}"
+}}
 
-JSON ONLY.
-""".strip()
+Rules:
+- Return JSON ONLY
+- No explanations
+- Links must use https://tedd.training
+- Email must end with: (This is a training simulation email.)
+"""
+
+
+# ------------------------------------
+# Inbox-based quiz prompt
+# ------------------------------------
+
+def build_inbox_email_prompt(item, profile):
+
+    scenario = item.scenario_id
+    category = item.category
+    difficulty = item.difficulty
+
+    topics = ", ".join(profile.get("top_topics", []))
+    domains = ", ".join(profile.get("common_sender_domains", []))
+
+    return f"""
+You are generating a phishing awareness training email.
+
+The email must look similar to emails the user normally receives.
+
+User Inbox Profile:
+Common topics: {topics}
+Common sender domains: {domains}
+
+Scenario: {scenario}
+Category: {category}
+Difficulty: {difficulty}
+
+Return ONLY valid JSON in this structure:
+
+{{
+  "email_id": "",
+  "scenario_id": "{scenario}",
+  "category": "{category}",
+  "difficulty": {difficulty},
+  "subject": "",
+  "from_name": "",
+  "from_email": "",
+  "reply_to": "",
+  "headers": {{}},
+  "body_text": "",
+  "links": [
+    {{
+      "display_text": "",
+      "url": "https://tedd.training/example"
+    }}
+  ],
+  "attachments": [],
+  "intended_red_flags": [],
+  "ground_truth": "{category}",
+  "model_version": "llama3-local",
+  "prompt_version": "{PROMPT_VERSION}"
+}}
+
+Important:
+- Make the email resemble real inbox emails
+- Use topics similar to: {topics}
+- Sender domains may resemble: {domains}
+- Links must still use https://tedd.training
+- Return JSON ONLY
+- Email must end with: (This is a training simulation email.)
+"""
