@@ -16,9 +16,24 @@ from typing import List, Dict
 from features import HTMLFeatures, URLFeatures
 from collections import Counter
 from dotenv import load_dotenv
+import shap
+from groq import Groq
+from lime.lime_text import LimeTextExplainer
+import numpy as np
+import requests 
+import json
+
+# Initialize LIME Text Explainer globally
+lime_text_explainer = LimeTextExplainer(class_names=['Legitimate', 'Phishing'])
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    logging.warning("GROQ_API_KEY is missing from environment variables.")
+else:
+    groq_client = Groq(api_key=GROQ_API_KEY)
 
 BERT_MODEL_PATH = "./tedd_bert_final"
 URL_MODEL_PATH = "./URLClassifier.joblib"
@@ -154,7 +169,27 @@ def predict_text_bert(text: str) -> Dict:
         result = "Phishing" if predicted_class.item() == 1 else "Legitimate"
         raw_risk = confidence.item() if result == "Phishing" else (1.0 - confidence.item())
 
-        return {"model": "BERT", "prediction": result, "confidence": round(float(confidence.item()), 4), "raw_risk": float(raw_risk), "word_count": word_count}
+        # ==========================================
+        # LIME: Extract word importance for LLaMA
+        # ==========================================
+        def predictor_for_lime(texts):
+            lime_inputs = tokenizer(texts, return_tensors="pt", truncation=True, padding=True, max_length=512)
+            with torch.no_grad():
+                lime_outputs = bert_model(**lime_inputs)
+                lime_probs = F.softmax(lime_outputs.logits / temperature, dim=1).numpy()
+            return lime_probs
+
+        exp = lime_text_explainer.explain_instance(clean_text, predictor_for_lime, num_features=5)
+        lime_explanation_data = [{"word": word, "weight": float(weight)} for word, weight in exp.as_list()]
+
+        return {
+            "model": "BERT", 
+            "prediction": result, 
+            "confidence": round(float(confidence.item()), 4), 
+            "raw_risk": float(raw_risk), 
+            "word_count": word_count,
+            "lime_explanation": lime_explanation_data
+        }
     except Exception as e:
         return {"model": "BERT", "error": str(e)}
 
@@ -166,6 +201,9 @@ def predict_url_features(urls: List[str]) -> Dict:
         domain_counts = Counter([urlparse(u).netloc.lower() for u in urls])
         unique_domains = len(set([urlparse(u).netloc.lower() for u in urls if urlparse(u).netloc]))
         all_results = []
+
+        max_risk_tracked = -1.0
+        riskiest_features_dict = {}
         
         for url in urls:
             features_dict = URLFeatures(url).get_features()
@@ -181,6 +219,10 @@ def predict_url_features(urls: List[str]) -> Dict:
                 risk = risk * 0.4
             
             all_results.append(risk)
+
+            if risk > max_risk_tracked:
+                max_risk_tracked = risk
+                riskiest_features_dict = features_dict
         
         if not all_results:
              return {"model": "URL", "prediction": "Legitimate", "confidence": 1.0, "raw_risk": 0.0}
@@ -189,6 +231,25 @@ def predict_url_features(urls: List[str]) -> Dict:
         final_prediction = "Phishing" if max_risk >= 0.5 else "Legitimate"
         display_confidence = max_risk if final_prediction == "Phishing" else (1.0 - max_risk)
             
+        shap_explanation_data = []
+        if riskiest_features_dict:
+            feature_names = list(riskiest_features_dict.keys())
+            feature_values = list(riskiest_features_dict.values())
+            
+            explainer = shap.TreeExplainer(url_model)
+            shap_values = explainer.shap_values(np.array([feature_values]))
+            
+            if isinstance(shap_values, list):
+                instance_shap_values = shap_values[1][0]
+            else:
+                instance_shap_values = shap_values[0]
+
+            shap_explanation_data = [
+                {"feature": feat, "shap_value": float(val)} 
+                for feat, val in zip(feature_names, instance_shap_values)
+            ]
+            shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+
         return {
             "model": "URL", 
             "prediction": final_prediction, 
@@ -208,15 +269,103 @@ def predict_html_features(html_text: str) -> Dict:
         
         tag_count = len(BeautifulSoup(html_text, "html.parser").find_all()) if html_text.strip() else 0
         features_dict = HTMLFeatures(html_text).get_features()
-        prediction = html_model.predict([list(features_dict.values())])[0]
-        confidence = float(max(html_model.predict_proba([list(features_dict.values())])[0]))
+        feature_names = list(features_dict.keys())
+        feature_values = list(features_dict.values())
+        
+        prediction = html_model.predict([feature_values])[0]
+        confidence = float(max(html_model.predict_proba([feature_values])[0]))
         
         result = "Phishing" if int(prediction) == 1 else "Legitimate"
         raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
         
-        return {"model": "HTML", "prediction": result, "confidence": round(confidence, 4), "raw_risk": float(raw_risk), "html_tag_count": tag_count}
+        # ==========================================
+        # SHAP: Extract feature importance for LLaMA
+        # ==========================================
+        explainer = shap.TreeExplainer(html_model)
+        shap_values = explainer.shap_values(np.array([feature_values]))
+        
+        if isinstance(shap_values, list):
+            instance_shap_values = shap_values[1][0]
+        else:
+            instance_shap_values = shap_values[0]
+
+        shap_explanation_data = [
+            {"feature": feat, "shap_value": float(val)} 
+            for feat, val in zip(feature_names, instance_shap_values)
+        ]
+        shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+        
+        return {
+            "model": "HTML", 
+            "prediction": result, 
+            "confidence": round(confidence, 4), 
+            "raw_risk": float(raw_risk), 
+            "html_tag_count": tag_count,
+            "shap_explanation": shap_explanation_data[:5] # <- Added for LLaMA
+        }
     except Exception as e:
         return {"model": "HTML", "error": str(e)}
+
+# ============================================================
+# LLM EXPLANATION GENERATION (LLaMA)
+# ============================================================
+
+def generate_llama_explanation(predictions: List[Dict], ensemble_result: Dict) -> str:
+    """
+    Takes the LIME/SHAP explanations and final score, constructs a prompt,
+    and calls a LLaMA model to generate a human-readable explanation in Japanese.
+    """
+    # 1. Gather all analytical data from the predictions
+    lime_data = []
+    shap_html_data = []
+    shap_url_data = []
+
+    for p in predictions:
+        if p.get("model") == "BERT" and "lime_explanation" in p:
+            lime_data = p["lime_explanation"]
+        elif p.get("model") == "HTML" and "shap_explanation" in p:
+            shap_html_data = p["shap_explanation"]
+        elif p.get("model") == "URL" and "shap_explanation" in p:
+            shap_url_data = p["shap_explanation"]
+
+    final_prediction = ensemble_result.get("final_prediction", "Unknown")
+    threat_level = ensemble_result.get("threat_level", 0.0)
+
+    # 2. Construct the prompt for LLaMA
+    prompt = f"""
+    You are an expert cybersecurity analyst. Your task is to explain to a regular user why an email was classified as {final_prediction} (Threat Level: {threat_level * 100}%).
+    
+    Here is the analysis data from our AI models:
+    
+    1. Text Analysis (LIME Weights - Positive means phishing, Negative means safe):
+    {json.dumps(lime_data, indent=2)}
+    
+    2. HTML Structure Analysis (SHAP Values - Positive means phishing, Negative means safe):
+    {json.dumps(shap_html_data, indent=2)}
+    
+    3. URL Analysis (SHAP Values - Positive means phishing, Negative means safe):
+    {json.dumps(shap_url_data, indent=2)}
+    
+    Based on this data, write a brief, easy-to-understand explanation (around 3-4 sentences) of the main reasons for this classification. 
+    Do not show the raw numbers to the user, but use them to formulate your logic.
+    """
+
+    # 3. Call the Groq API (LLaMA 3.3)
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+             }   
+            ],
+            model="llama-3.3-70b-versatile", 
+            max_tokens=300,  
+        )
+        return chat_completion.choices[0].message.content
+    except Exception as e:
+        logging.error(f"❌ Error communicating with Groq API: {e}")
+        return "Sorry, system is currently unable to generate a detailed explanation. (Communication error with the AI explanation server.)"
 
 # ============================================================
 # CONTEXT-AWARE ENSEMBLE SCORING (NO WHITELISTS)
@@ -364,6 +513,9 @@ async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = 
         
         total_result = calculate_total_phishing_score(predictions, parsed_email.get("is_spoofed", False))
         
+        llama_explanation = generate_llama_explanation(predictions, total_result)
+        total_result["human_readable_explanation"] = llama_explanation
+
         return {"individual_predictions": predictions, "combined_analysis": total_result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

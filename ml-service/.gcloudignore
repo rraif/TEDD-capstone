@@ -1,0 +1,23 @@
+# Google Cloudに送信しないリスト
+.gcloudignore
+.git
+.gitignore
+
+# 仮想環境（これが一番重いので必ず除外！）
+.venv/
+venv/
+env/
+bin/
+lib/
+share/
+include/
+
+# Pythonのキャッシュ
+**/__pycache__/
+*.pyc
+
+# ローカルの環境変数ファイル（セキュリティのため）
+.env
+
+# テストコードなど
+test_groq.py
