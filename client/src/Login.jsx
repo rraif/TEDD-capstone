@@ -8,8 +8,8 @@ import googleIcon from './assets/google.svg'
 
 const Login = () => {
   const handleLogin = () => {
-    const apiUrl = import.meta.env.VITE_API_URL;
-    window.location.href = `${apiUrl}/auth/google`;
+    const apiURL = import.meta.env.VITE_API_URL;
+    window.location.href = `${apiURL}/auth/google`;
   };
 
   return (

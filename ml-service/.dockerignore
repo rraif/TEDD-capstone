@@ -1,0 +1,21 @@
+# Git and IDEs
+.git
+.gitignore
+.vscode/
+__pycache__/
+
+# Python virtual environments (Crucial to ignore!)
+venv/
+.venv/
+env/
+
+# Python compiled files
+*.pyc
+*.pyo
+*.pyd
+
+# Security
+.env
+
+# Docker
+Dockerfile

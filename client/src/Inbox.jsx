@@ -6,7 +6,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [showHeadersOnly, setShowHeadersOnly] = useState(false); 
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
-  const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiURL = import.meta.env.VITE_API_URL;
 
   // 🛡️ BULLETPROOF FETCH: Prevents the White Screen of Death
   useEffect(() => {

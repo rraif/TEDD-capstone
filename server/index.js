@@ -11,6 +11,7 @@ const limiter = rateLimit({
     limit: 200, //change before deploy
     standardHeaders: true, 
     legacyHeaders: false,
+    keyGenerator: (req) => req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
     message: "Too many requests from this IP, try again later"
 });
 
@@ -25,6 +26,7 @@ const {encrypt, decrypt} = require('./crypto.js');
 const crypto = require('crypto');
 
 const app = express(); 
+app.set('trust proxy', 1);
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 
@@ -291,7 +293,7 @@ app.get('/api/current_user', (req, res) => {
 });
 
 
-app.get('/logout', (req, res, next) => {
+app.get('/api/logout', (req, res, next) => {
     req.logout(() => {
         req.session.destroy();
         res.redirect(process.env.CLIENT_URL);
@@ -524,7 +526,7 @@ const {emailId} = req.body;
         const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
 
         // 3. Call new ensemble model (Kept your native fetch and environment variables!)
-        const mlUrl = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
+        const mlUrl = process.env.ML_SERVICE_URL;
 
         const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
             method:'POST',
