@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react';
 
+// 🚀 Helper function to cleanly calculate threat status
+const getThreatStatus = (verdict, confidence) => {
+  const conf = confidence || 0;
+  if (verdict === 'Phishing' && conf >= 0.70) return 'Phishing';
+  if (verdict === 'Phishing' && conf < 0.70) return 'Suspicious';
+  if (verdict === 'Legitimate' && conf <= 0.60) return 'Suspicious';
+  return 'Safe';
+};
+
 const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [emails, setEmails] = useState(null);
   const [selectedEmail, setSelectedEmail] = useState(null);
   const [showHeadersOnly, setShowHeadersOnly] = useState(false); 
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [isExplaining, setIsExplaining] = useState(false); // 🚀 Added explaining state
   const apiURL = import.meta.env.VITE_API_URL;
 
   // 🛡️ BULLETPROOF FETCH: Prevents the White Screen of Death
@@ -93,20 +103,45 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
       
       setSelectedEmail(fullData);
 
-      // AI Scanner
+      // 🚀 TWO-STAGE INFERENCE PIPELINE
+      // 1. Initial Fast Scan
       fetch(`${apiURL}/api/scan`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emailId: emailPreview.id }),
           credentials: 'include'
       })
-      .then (res => {
+      .then(res => {
         if (!res.ok) throw new Error("Network response was not ok");
         return res.json();
       })
-      .then(scanData =>{
+      .then(scanData => {
         setScanResult(scanData);
         setIsScanning(false);
+
+        // 2. Check threat status cleanly using our helper function
+        const status = getThreatStatus(scanData.verdict, scanData.confidence);
+
+        // 3. Trigger deep analysis only if Suspicious or Phishing
+        if (status === 'Phishing' || status === 'Suspicious') {
+            setIsExplaining(true);
+            fetch(`${apiURL}/api/explain`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emailId: emailPreview.id }),
+                credentials: 'include'
+            })
+            .then(res => res.json())
+            .then(explainData => {
+                // Merge the new explanation data into the existing scan result
+                setScanResult(prev => ({ ...prev, explanation: explainData }));
+                setIsExplaining(false);
+            })
+            .catch(err => {
+                console.error("XAI failed", err);
+                setIsExplaining(false);
+            });
+        }
       })
       .catch(err => {
         console.error("Auto scan failed", err);
@@ -140,19 +175,12 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                 i % 2 === 0 ? 'bg-[#020617]' : 'bg-[#0F172A]'
               }`}
             >
-              {/* Checkbox Placeholder */}
               <div className="w-4 h-4 rounded bg-slate-700/40"></div>
-              
-              {/* Sender Placeholder */}
               <div className="w-48 h-4 bg-slate-700/40 rounded"></div>
-              
-              {/* Subject & Snippet Placeholder */}
               <div className="flex-1 flex items-center gap-3">
                 <div className="h-4 w-1/3 bg-slate-600/40 rounded"></div>
                 <div className="h-4 w-1/2 bg-slate-800/60 rounded"></div>
               </div>
-
-              {/* Date Placeholder */}
               <div className="w-16 h-4 bg-slate-700/40 rounded"></div>
             </div>
           ))}
@@ -209,7 +237,6 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
           )}
         </div> 
 
-        {/* 🚀 THE NEW SPLIT LAYOUT */}
         <div className="p-8 max-w-full mx-auto flex flex-col xl:flex-row gap-8 items-start w-full">
           
           {/* LEFT COLUMN: The actual email content */}
@@ -288,7 +315,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
             </div>
           </div>
 
-{/* RIGHT COLUMN: The AI Security Inspector Panel */}
+          {/* RIGHT COLUMN: The AI Security Inspector Panel */}
           <div className="w-full xl:w-80 shrink-0 sticky top-20">
             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4 border-b border-slate-800/80 pb-2">
               Security Analysis
@@ -301,28 +328,16 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 <div className="space-y-2 animate-pulse">
-                  <div className="font-bold">Scanning Payload</div>
-                  <div className="text-xs opacity-70">Running Context Engine...</div>
+                  <div className="font-bold">Scanning Email</div>
+                  <div className="text-xs opacity-70">Looking for Phishing Signs...</div>
                 </div>
               </div>
             )}
 
             {!isScanning && scanResult && (() => {
-              // 🚀 BULLETPROOF LOGIC (Bypasses the Node.js Middleware issue)
-              // The Express server drops "threat_level", so we must mathematically 
-              // reconstruct the 3 tiers using ONLY "verdict" and "confidence".
-              
-              let status = 'Safe';
-              const isPhishing = scanResult.verdict === 'Phishing';
+              // 🚀 Clean Logic: Just use the helper function!
+              const status = getThreatStatus(scanResult.verdict, scanResult.confidence);
               const conf = scanResult.confidence || 0;
-              
-              if (isPhishing && conf >= 0.70) {
-                status = 'Phishing';   // Raw risk was 0.70 or higher
-              } else if (isPhishing && conf < 0.70) {
-                status = 'Suspicious'; // Raw risk was between 0.50 and 0.69
-              } else if (!isPhishing && conf <= 0.60) {
-                status = 'Suspicious'; // Raw risk was between 0.40 and 0.49
-              }
 
               return (
                 <>
@@ -340,13 +355,12 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                         : "Nothing Detected"}
                     </h3>
                     
-                    {/* UI DISPLAYS THE CONFIDENCE SCORE */}
                     <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
                       Confidence: {(conf * 100).toFixed(1)}%
                     </div>
                   </div>
 
-                  {/* 2. The Explainable AI Box */}
+                  {/* 2. The Explainable AI Box (Conditionally rendered) */}
                   {(status === 'Phishing' || status === 'Suspicious') && (
                     <div className="mt-4 bg-[#020617] border border-slate-800 rounded-lg p-5 shadow-lg relative overflow-hidden">
                       <div className={`absolute top-0 left-0 right-0 h-1 opacity-50 bg-gradient-to-r ${
@@ -359,14 +373,73 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                         {status === 'Phishing' ? 'Phishing Explanation' : 'Why is this Suspicious?'}
                       </div>
                       
-                      <p className="text-slate-400 text-sm leading-relaxed">
-                        {status === 'Suspicious' 
-                          ? "Suspicious Explanation goes here"
-                          : "Phishing explanation goes here"
-                        }
-                      </p>
+                      {/* THE SECONDARY LOADER */}
+                      {isExplaining ? (
+                          <div className="flex flex-col items-center justify-center py-6 space-y-4">
+                              <svg className="animate-spin h-8 w-8 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              <div className="text-xs text-slate-400 font-mono animate-pulse">Running Deep XAI Threat Analysis...</div>
+                          </div>
+                      ) : (
+                          <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">
+                              {scanResult.explanation?.human_readable_explanation || "Unable to generate detailed explanation."}
+                          </p>
+                      )}
                     </div>
                   )}
+                  
+                  {/* Visualizer Placeholder for Next Step */}
+                  {/* {!isExplaining && (status === 'Phishing' || status === 'Suspicious') && scanResult.explanation && (
+                    <div className="mt-6 space-y-4 border-t border-slate-800 pt-5">
+                       <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-3">
+                          Threat Matrix Data
+                       </h4>
+                       
+                       {scanResult.explanation.individual_predictions?.map((pred, i) => {
+                          const isText = pred.model === 'BERT';
+                          const dataList = isText ? pred.lime_explanation : pred.shap_explanation;
+                          
+                          if (!dataList || dataList.length === 0) return null;
+
+                          return (
+                            <div key={i} className="bg-[#0f172a] rounded p-3 border border-slate-800/50">
+                              <div className="text-xs font-bold text-slate-400 mb-3 border-b border-slate-800 pb-1">
+                                {isText ? 'Text Analysis (LIME)' : `${pred.model} Analysis (SHAP)`}
+                              </div>
+                              <div className="space-y-2 mt-2">
+                                {dataList.map((item, j) => {
+                                  const name = item.word || item.feature;
+                                  const weight = item.weight || item.shap_value;
+                                  const isPositive = weight > 0;
+                                  // Math to size the bars (cap at 100%)
+                                  const widthPct = Math.min(Math.abs(weight) * 100, 100);
+
+                                  return (
+                                    <div key={j} className="flex items-center text-xs">
+                                      <div className="w-28 truncate text-slate-300 pr-2" title={name}>
+                                        {name}
+                                      </div>
+                                      <div className="flex-1 bg-slate-800/50 h-2 rounded-full overflow-hidden flex">
+                                        <div 
+                                          className={`h-full transition-all duration-1000 ${isPositive ? 'bg-red-500' : 'bg-green-500'}`} 
+                                          style={{ width: `${widthPct}%` }}
+                                        ></div>
+                                      </div>
+                                      <div className={`w-14 text-right font-mono text-[10px] ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
+                                        {isPositive ? '+' : ''}{weight.toFixed(3)}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          );
+                       })}
+                    </div>
+                  )} */}
+                {/*the thing ends here */}
                 </>
               );
             })()}

@@ -557,6 +557,31 @@ const {emailId} = req.body;
     }
 });
 
+app.post('/api/explain', requireGoogleAuth, async(req, res) => {
+    const {emailId} = req.body;
+    if (!emailId) return res.status(400).json({error: 'email ID required'});
+
+    try{
+        const gmail = getGmailClient(req.user);
+        const response = await gmail.users.messages.get({ userId: 'me', id: emailId, format: 'raw' }); 
+        const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
+
+        const mlResponse = await fetch(`${process.env.ML_SERVICE_URL}/explain-threat`, {
+            method:'POST',
+            headers:{ 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY },
+            body: JSON.stringify({email_content: rawEmailString})
+        });
+
+        if (!mlResponse.ok) throw new Error("Explain API failed");
+        
+        const mlResult = await mlResponse.json();
+        res.json(mlResult); // Sends back the LLaMA text and SHAP arrays
+    } catch (error) {
+        console.error('Explain Error:', error.message);
+        res.status(503).json({ error: "Explain Failed" });
+    }
+});
+
 //user profile
 app.get('/api/current-user', requireGoogleAuth, async (req, res) => {
     try {
