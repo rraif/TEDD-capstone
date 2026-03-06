@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [emails, setEmails] = useState(null);
@@ -7,6 +7,57 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const apiURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+// --- NEW: Modal & Timer State ---
+  const [showLinkWarning, setShowLinkWarning] = useState(false);
+  const [pendingLink, setPendingLink] = useState('');
+  const [holdProgress, setHoldProgress] = useState(0);
+  const holdTimerRef = useRef(null);
+
+  // --- NEW: Link Intercept & Hold Logic ---
+  
+const handleEmailBodyClick = (e) => {
+    // Only intercept Left Click (0) and Middle Click (1)
+    // Ignore Right Click (2) so the standard context menu still works
+    if (e.button !== 0 && e.button !== 1) return;
+    
+    // Find closest anchor tag (in case they clicked an image or text inside the link)
+    const link = e.target.closest('a');
+    if (link && link.href) {
+      e.preventDefault(); // Stop the browser from navigating immediately
+      setPendingLink(link.href);
+      setShowLinkWarning(true);
+    }
+  };
+
+  const closeWarning = () => {
+    setShowLinkWarning(false);
+    setPendingLink('');
+    cancelHold();
+  };
+
+  const startHold = () => {
+    let progress = 0;
+    // Update progress every 50ms (50ms * 100 steps = 5000ms = 5 seconds)
+    holdTimerRef.current = setInterval(() => {
+      progress += 1;
+      setHoldProgress(progress);
+      
+      if (progress >= 100) {
+        clearInterval(holdTimerRef.current);
+        window.open(pendingLink, '_blank', 'noopener,noreferrer'); // Open safely in new tab
+        closeWarning();
+      }
+    }, 50);
+  };
+
+  const cancelHold = () => {
+    if (holdTimerRef.current) {
+      clearInterval(holdTimerRef.current);
+    }
+    setHoldProgress(0); // Reset progress bar
+  };
+
 
   // 🛡️ BULLETPROOF FETCH: Prevents the White Screen of Death
   useEffect(() => {
@@ -284,9 +335,61 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
               <div 
                 className="bg-white text-black p-6 rounded-md text-sm leading-relaxed max-w-none break-words"
                 dangerouslySetInnerHTML={{ __html: selectedEmail.basic.body }}
+                onClick={handleEmailBodyClick}
+                onAuxClick={handleEmailBodyClick}
               />
             </div>
           </div>
+          
+{/* --- NEW: Link Warning Modal Overlay --- */}
+      {showLinkWarning && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#0F172A] border border-red-500/50 rounded-xl p-6 max-w-lg w-full shadow-2xl text-slate-200">
+            
+            <h2 className="text-2xl font-bold text-red-500 mb-4 flex items-center gap-2">
+              <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+              WARNING: link press
+            </h2>
+            
+            <div className="mb-8 space-y-4">
+              <p className="text-slate-300 text-lg">You are about to go to:</p>
+              <div className="bg-[#020617] p-4 rounded-lg border border-slate-700 break-all text-blue-400 font-mono text-sm max-h-32 overflow-y-auto shadow-inner">
+                {pendingLink}
+              </div>
+              <p className="font-semibold text-amber-400">Please proceed any links with caution.</p>
+            </div>
+            
+            <div className="flex justify-between items-center gap-4 border-t border-slate-800 pt-6">
+              <button
+                onClick={closeWarning}
+                className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 font-medium transition-colors"
+              >
+                Go back
+              </button>
+              
+              <button
+                onMouseDown={startHold}
+                onMouseUp={cancelHold}
+                onMouseLeave={cancelHold}
+                onTouchStart={startHold}
+                onTouchEnd={cancelHold}
+                className="relative px-6 py-3 bg-red-950/40 hover:bg-red-900/40 border border-red-500/50 rounded-lg text-red-200 overflow-hidden transition-colors select-none font-medium"
+              >
+                {/* Progress Bar Background */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 bg-red-600/50 transition-all duration-[50ms] ease-linear"
+                  style={{ width: `${holdProgress}%` }}
+                ></div>
+                
+                <span className="relative z-10 flex items-center gap-2">
+                  {holdProgress > 0 ? `Holding... ${Math.floor(holdProgress)}%` : "Hold 5s to Continue"}
+                </span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
 {/* RIGHT COLUMN: The AI Security Inspector Panel */}
           <div className="w-full xl:w-80 shrink-0 sticky top-20">
@@ -370,9 +473,11 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                 </>
               );
             })()}
+          
           </div>
         </div>
       </div>
+  
     );
   }
 

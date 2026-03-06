@@ -6,6 +6,8 @@ import Inbox from './Inbox';
 import Layout from './Layout'; 
 import Admin from './Admin';
 import Stats from './Stats';
+import Training from './Training';
+
 
 function App() {
   return (
@@ -27,7 +29,7 @@ function App() {
           />
           <Route path="/admin" element={<Admin />} />
           <Route path="/stats" element={<Stats />} />
-          
+           <Route path="/training" element={<Training />} />
         </Route>
       </Routes>
     </BrowserRouter>
