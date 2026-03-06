@@ -526,7 +526,7 @@ const {emailId} = req.body;
         const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
 
         // 3. Call new ensemble model (Kept your native fetch and environment variables!)
-        const mlUrl = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
+        const mlUrl = process.env.ML_SERVICE_URL;
 
         const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
             method:'POST',
