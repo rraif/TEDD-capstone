@@ -11,6 +11,7 @@ const limiter = rateLimit({
     limit: 200, //change before deploy
     standardHeaders: true, 
     legacyHeaders: false,
+    keyGenerator: (req) => req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
     message: "Too many requests from this IP, try again later"
 });
 

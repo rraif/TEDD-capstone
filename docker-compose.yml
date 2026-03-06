@@ -5,8 +5,8 @@ services:
   ml-service:
     build: ./ml-service
     container_name: tedd-ml-service
-    ports:
-      - "${ML_PORT}:${ML_PORT}"
+    expose:
+      - "${ML_PORT}"
     environment:
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
 
