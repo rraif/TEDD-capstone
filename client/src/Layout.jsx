@@ -32,7 +32,7 @@ export default function Layout() {
   }, [apiURL]);
 
   const handleLogout = () => {
-    window.location.href = `${apiURL}/logout`;
+    window.location.href = `${apiURL}/api/logout`;
   };
 
   if (loading) {

@@ -293,7 +293,7 @@ app.get('/api/current_user', (req, res) => {
 });
 
 
-app.get('/logout', (req, res, next) => {
+app.get('/api/logout', (req, res, next) => {
     req.logout(() => {
         req.session.destroy();
         res.redirect(process.env.CLIENT_URL);
