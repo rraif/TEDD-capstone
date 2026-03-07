@@ -12,6 +12,7 @@ from string import punctuation
 import email
 from email.utils import parseaddr
 from pyquery import PyQuery
+from datetime import datetime
 
 """
 Module to extract relevant features from Email HTML.
@@ -377,261 +378,161 @@ class TextFeatures:
         }
 
 
-class HeaderFeatures:
-    """Extracts Email Header Features for phishing detection"""
+class TeddFeatureExtractor:
+    def __init__(self):
+        # The exact order of columns from your dataset
+        self.feature_names = [
+            'hops', 'missing_received1', 'missing_received2', 'missing_received3', 'missing_received4', 'missing_received5', 'missing_received6', 'missing_received7', 'missing_received8', 'missing_received9', 'missing_received10', 'missing_received11', 'missing_received12', 'missing_received13', 'missing_received14', 'missing_received15', 'missing_received16',
+            'missing_subject', 'missing_date', 'missing_message-id', 'missing_from', 'missing_return-path', 'missing_to', 'missing_content-type', 'missing_mime-version', 'missing_x-mailer', 'missing_content-transfer-encoding', 'missing_x-mimeole', 'missing_x-priority', 'missing_list-id', 'missing_lines', 'missing_x-virus-scanned', 'missing_status', 'missing_content-length', 'missing_precedence', 'missing_delivered-to', 'missing_list-unsubscribe', 'missing_list-subscribe', 'missing_list-post', 'missing_list-help', 'missing_x-msmail-priority', 'missing_x-spam-status', 'missing_sender', 'missing_errors-to', 'missing_x-beenthere', 'missing_list-archive', 'missing_reply-to', 'missing_x-mailman-version', 'missing_x-miltered', 'missing_x-uuid', 'missing_x-virus-status', 'missing_x-spam-level', 'missing_x-spam-checker-version', 'missing_references', 'missing_in-reply-to', 'missing_user-agent', 'missing_thread-index', 'missing_cc', 'missing_received-spf', 'missing_x-original-to', 'missing_content-disposition', 'missing_mailing-list', 'missing_x-spam-check-by', 'missing_domainkey-signature', 'missing_importance', 'missing_x-mailing-list',
+            'content-encoding-val', 'received_str_forged', 'str_content-encoding_empty', 'str_from_question', 'str_from_exclam', 'str_from_chevron', 'str_to_chevron', 'str_to_undisclosed', 'str_to_empty', 'str_message-ID_dollar', 'str_return-path_bounce', 'str_return-path_empty', 'str_reply-to_question', 'str_received-SPF_bad', 'str_received-SPF_softfail', 'str_received-SPF_fail', 'str_content-type_texthtml', 'str_precedence_list',
+            'length_from', 'num_recipients_to', 'num_recipients_cc', 'num_recipients_from', 'number_replies', 'time_zone', 'x-priority', 'content-length', 'lines', 'day_of_week', 'date_comp_date_received', 'span_time',
+            'conseq_num_received_is_one', 'conseq_received_good', 'conseq_received_bad', 'conseq_received_unknown', 'conseq_received_date', 'email_match_from_reply-to', 'domain_val_message-id',
+            'domain_match_message-id_from', 'domain_match_from_return-path', 'domain_match_message-id_return-path', 'domain_match_message-id_sender', 'domain_match_message-id_reply-to', 'domain_match_return-path_reply-to', 'domain_match_reply-to_to', 'domain_match_to_in-reply-to', 'domain_match_errors-to_message-id', 'domain_match_errors-to_from', 'domain_match_errors-to_sender', 'domain_match_errors-to_reply-to', 'domain_match_sender_from', 'domain_match_references_reply-to', 'domain_match_references_in-reply-to', 'domain_match_references_to', 'domain_match_from_reply-to', 'domain_match_to_from', 'domain_match_to_message-id', 'domain_match_reply-to_received', 'domain_match_to_received', 'domain_match_return-path_received', 'domain_match_from_received'
+        ]
 
-    def __init__(self, header_dict: dict):
-        """
-        header_dict should contain comprehensive header information including authentication headers
-        """
-        self.from_addr = header_dict.get('from', '')
-        self.to_addr = header_dict.get('to', '')
-        self.subject = header_dict.get('subject', '')
-        self.date = header_dict.get('date', '')
-        self.cc = header_dict.get('cc', '')
-        self.bcc = header_dict.get('bcc', '')
-        self.reply_to = header_dict.get('reply_to', '')
-        # Authentication headers
-        self.delivered_to = header_dict.get('delivered_to', '')
-        self.return_path = header_dict.get('return_path', '')
-        self.message_id = header_dict.get('message_id', '')
-        self.x_originating_ip = header_dict.get('x_originating_ip', '')
-        self.x_mailer = header_dict.get('x_mailer', '')
-        # Authentication results
-        self.dkim_signature = header_dict.get('dkim_result', '')
-        self.authentication_results = header_dict.get('authentication_results', '')
-        self.received_spf = header_dict.get('received_spf', '')
-        # Multiple received headers
-        self.received_headers = header_dict.get('received_headers', []) or []
-        # Arc headers
-        self.arc_seal = header_dict.get('arc_seal', '')
-        self.arc_message_signature = header_dict.get('arc_message_signature', '')
-        self.arc_authentication_results = header_dict.get('arc_authentication_results', '')
-        # Forwarding headers
-        self.x_forwarded_for = header_dict.get('x_forwarded_for', '')
-        self.x_forwarded_encrypted = header_dict.get('x_forwarded_encrypted', '')
+    def _get_domains(self, header_str):
+        if not header_str: return []
+        emails = re.findall(r'([a-zA-Z0-9+._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)', header_str)
+        domains = []
+        for e in emails:
+            parts = e.split('@')[-1].split('.')
+            if len(parts) >= 2:
+                main_domain = parts[-2] + '.' + re.sub(r'\W+', '', parts[-1])
+                domains.append(main_domain.lower())
+        return domains
 
-    # ===== BASIC HEADER CHECKS =====
-    def has_from_address(self):
-        """Check if From address exists"""
-        return bool(self.from_addr)
+    def _domain_match(self, d1_list, d2_list):
+        if not d1_list or not d2_list: return 0
+        return 1 if any(d1 == d2 for d1 in d1_list for d2 in d2_list) else 0
 
-    def has_to_address(self):
-        """Check if To address exists"""
-        return bool(self.to_addr)
+    def extract(self, raw_email_text):
+        msg = email.message_from_string(raw_email_text)
+        features = {col: 0.0 for col in self.feature_names} # Initialize all to 0.0
 
-    def from_to_mismatch(self):
-        """Check if From and To addresses are the same (suspicious)"""
-        if self.from_addr and self.to_addr:
-            from_domain = self.from_addr.split('@')[-1] if '@' in self.from_addr else ''
-            to_domain = self.to_addr.split('@')[-1] if '@' in self.to_addr else ''
-            return from_domain == to_domain
-        return False
+        # --- 1. Header Extraction ---
+        headers = {k.lower(): str(v).replace('\n', ' ').replace('\t', ' ') for k, v in msg.items()}
+        received_list = msg.get_all('Received') or []
 
-    def reply_to_mismatch(self):
-        """Check if Reply-To differs from From address (suspicious)"""
-        if self.reply_to and self.from_addr:
-            return self.reply_to.lower() != self.from_addr.lower()
-        return False
+        # --- 2. Missing Features Check ---
+        for f in self.feature_names:
+            # FIX: Ensure we only parse numbered received features
+            if f.startswith('missing_received') and f.replace('missing_received', '').isdigit():
+                num = int(f.replace('missing_received', ''))
+                features[f] = 0.0 if len(received_list) >= num else 1.0
+            elif f.startswith('missing_'):
+                header_name = f.replace('missing_', '')
+                features[f] = 0.0 if msg.get(header_name) else 1.0
 
-    def from_contains_suspicious_keywords(self):
-        """Check for suspicious keywords in From address"""
-        suspicious = ['support', 'noreply', 'mail', 'notification', 'alert', 'verify', 'confirm', 'urgent', 'action']
-        from_lower = self.from_addr.lower()
-        return any(keyword in from_lower for keyword in suspicious)
+        # --- 3. Base Counts & Lengths ---
+        raw_hops = len(received_list)
+        features['hops'] = 0 if raw_hops <= 2 else (1 if raw_hops <= 5 else 2)
 
-    def subject_urgency_indicators(self):
-        """Check for urgency indicators in subject"""
-        urgent_keywords = ['urgent', 'immediate', 'verify', 'confirm', 'action required', 'urgent action', 'act now', 'limited time']
-        subject_lower = self.subject.lower()
-        return sum(1 for keyword in urgent_keywords if keyword in subject_lower)
+        from_val = headers.get('from', '')
+        features['length_from'] = 0 if len(from_val) > 40 else 1
 
-    def subject_suspicious_keywords(self):
-        """Check for phishing-related keywords in subject"""
-        phishing_keywords = ['confirm', 'verify', 'update', 'suspended', 'locked', 'click', 'click here', 'act', 'reset', 'validate']
-        subject_lower = self.subject.lower()
-        return sum(1 for keyword in phishing_keywords if keyword in subject_lower)
+        for field in ['to', 'cc', 'from']:
+            num_rec = len(re.findall(r'([a-zA-Z0-9+._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)', headers.get(field, '')))
+            features[f'num_recipients_{field}'] = 0 if num_rec == 0 else (1 if num_rec == 1 else 2)
 
-    def cc_bcc_empty(self):
-        """Check if CC and BCC are empty (more likely to be phishing)"""
-        return not self.cc and not self.bcc
+        ref_count = len(re.findall(r'<.*?>', headers.get('references', '')))
+        features['number_replies'] = 0 if ref_count >= 1 else 1
 
-    def to_multiple_recipients(self):
-        """Check if email is sent to multiple recipients"""
-        return ',' in self.to_addr if self.to_addr else False
+        # --- 4. String Match Features ---
+        cte = headers.get('content-transfer-encoding', '')
+        features['content-encoding-val'] = 1 if not re.search(r'(?i)8bit|7bit', cte) else 0
+        features['str_content-encoding_empty'] = 1.0 if cte == "" else 0.0
 
-    def subject_length(self):
-        """Get subject length"""
-        return len(self.subject)
+        features['received_str_forged'] = 1 if any('forged' in r.lower() for r in received_list) else 0
+        features['str_from_question'] = 1.0 if '?' in from_val else 0.0
+        features['str_from_exclam'] = 1.0 if '!' in from_val else 0.0
+        features['str_from_chevron'] = 1.0 if re.search(r'<.+>', from_val) else 0.0
+        features['str_to_chevron'] = 1.0 if re.search(r'<.+>', headers.get('to', '')) else 0.0
+        features['str_to_undisclosed'] = 1.0 if 'Undisclosed Recipients' in headers.get('to', '') else 0.0
+        features['str_to_empty'] = 1.0 if headers.get('to', '') == "" else 0.0
+        features['str_message-ID_dollar'] = 1.0 if '$' in headers.get('message-id', '') else 0.0
+        features['str_return-path_bounce'] = 1.0 if 'bounce' in headers.get('return-path', '').lower() else 0.0
+        features['str_reply-to_question'] = 1.0 if '?' in headers.get('reply-to', '') else 0.0
 
-    def subject_entropy(self):
-        """Calculate subject entropy"""
-        if not self.subject:
-            return 0
-        subject_lower = self.subject.lower()
-        probs = [subject_lower.count(c) / len(subject_lower) for c in set(subject_lower)]
-        return round(-sum([p * log(p) / log(2.0) for p in probs]), 3) if probs else 0
+        spf = headers.get('received-spf', '').lower()
+        features['str_received-SPF_bad'] = 1.0 if 'bad' in spf else 0.0
+        features['str_received-SPF_softfail'] = 1.0 if 'softfail' in spf else 0.0
+        features['str_received-SPF_fail'] = 1.0 if 'fail' in spf else 0.0
+        features['str_content-type_texthtml'] = 1.0 if 'text/html' in headers.get('content-type', '').lower() else 0.0
+        features['str_precedence_list'] = 1.0 if 'list' in headers.get('precedence', '').lower() else 0.0
 
-    def from_is_ip_address(self):
-        """Check if From address uses IP instead of domain"""
-        try:
-            if '@' in self.from_addr:
-                domain = self.from_addr.split('@')[1]
-                parts = domain.split('.')
-                return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
-        except:
-            pass
-        return False
+        # --- 5. Discretized Numeric Headers ---
+        priority_val = re.search(r'(\d+)', headers.get('x-priority', '0'))
+        p_num = int(priority_val.group(1)) if priority_val else 0
+        features['x-priority'] = 0 if p_num != 3 else 1
 
-    def has_display_name_mismatch(self):
-        """Check if display name doesn't match actual email domain"""
-        if '<' in self.from_addr and '>' in self.from_addr:
-            display_part = self.from_addr[:self.from_addr.index('<')]
-            email_part = self.from_addr[self.from_addr.index('<')+1:self.from_addr.index('>')]
-            # Check if display name contains suspicious company names
-            suspicious_companies = ['paypal', 'amazon', 'apple', 'microsoft', 'google', 'bank', 'wells fargo', 'chase']
-            display_lower = display_part.lower()
-            email_domain = email_part.split('@')[-1] if '@' in email_part else ''
-            for company in suspicious_companies:
-                if company in display_lower and company not in email_domain:
-                    return True
-        return False
+        cl_val = re.search(r'(\d+)', headers.get('content-length', '0'))
+        cl_num = int(cl_val.group(1)) if cl_val else 0
+        features['content-length'] = 0 if cl_num < 1 else (1 if cl_num < 1274 else (2 if cl_num < 2348 else (3 if cl_num < 5798 else 4)))
 
-    # ===== AUTHENTICATION HEADER CHECKS =====
-    def return_path_mismatch(self):
-        """Check if Return-Path differs from From address"""
-        if self.return_path and self.from_addr:
-            return_domain = self.return_path.split('@')[-1].rstrip('>') if '@' in self.return_path else ''
-            from_domain = self.from_addr.split('@')[-1] if '@' in self.from_addr else ''
-            return return_domain != from_domain
-        return False
+        lines_val = re.search(r'(\d+)', headers.get('lines', '0'))
+        l_num = int(lines_val.group(1)) if lines_val else 0
+        features['lines'] = 0 if l_num == 0 else (1 if l_num <= 30 else (2 if l_num <= 54 else (3 if l_num <= 119 else 4)))
 
-    def delivered_to_mismatch(self):
-        """Check if Delivered-To differs from To address"""
-        if self.delivered_to and self.to_addr:
-            return self.delivered_to.lower() != self.to_addr.lower()
-        return False
+        # --- 6. Date & Time ---
+        tz = email.utils.parsedate_tz(headers.get('date', ''))
+        features['time_zone'] = 0
+        day_str = 'NA'
+        if tz:
+            tz_hours = int(tz[9] / 3600) % 24 if tz[9] else 0
+            features['time_zone'] = 1 if tz_hours == 20 else 0
+            try:
+                day_str = datetime.fromtimestamp(email.utils.mktime_tz(tz)).strftime("%A")
+            except: pass
 
-    def dkim_pass(self):
-        """Check if DKIM signature is present and passes"""
-        if not self.dkim_signature:
-            return 0
-        dkim_lower = self.dkim_signature.lower()
-        # Check for DKIM signature existence
-        if 'dkim-signature' in dkim_lower or 'v=1' in dkim_lower:
-            return 1
-        return 0
+        days = ['NA', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        features['day_of_week'] = days.index(day_str) if day_str in days else 0
 
-    def spf_pass(self):
-        """Check if SPF verification passed"""
-        if not self.received_spf and not self.authentication_results:
-            return 0
-        
-        combined = (self.received_spf + " " + self.authentication_results).lower()
-        if 'spf=pass' in combined or 'pass' in combined.split('spf=')[0] if 'spf=' in combined else False:
-            return 1
-        if 'spf=fail' in combined or 'fail' in combined:
-            return -1
-        return 0
+        first_rec = received_list[-1].split(';')[-1] if received_list else ""
+        last_rec = received_list[0].split(';')[-1] if received_list else ""
+        d_first = email.utils.parsedate_tz(first_rec)
+        d_last = email.utils.parsedate_tz(last_rec)
 
-    def dmarc_pass(self):
-        """Check if DMARC verification passed"""
-        auth_results = self.authentication_results.lower()
-        arc_results = self.arc_authentication_results.lower() if self.arc_authentication_results else ""
-        
-        combined = auth_results + " " + arc_results
-        if 'dmarc=pass' in combined:
-            return 1
-        if 'dmarc=fail' in combined:
-            return -1
-        return 0
+        if tz and d_last:
+            try: diff = email.utils.mktime_tz(d_last) - email.utils.mktime_tz(tz)
+            except: diff = -1
+            features['date_comp_date_received'] = 0 if diff < 0 else 1
 
-    def multiple_received_headers(self):
-        """Count multiple Received headers (forwarding indicator)"""
-        return len(self.received_headers) if self.received_headers else 0
+        if d_first and d_last:
+            try: span = email.utils.mktime_tz(d_last) - email.utils.mktime_tz(d_first)
+            except: span = -1
+            features['span_time'] = 0 if span < 0 else (1 if span < 10 else (2 if span < 47 else (3 if span < 1100 else 4)))
 
-    def suspicious_received_chain(self):
-        """Check for suspicious routing in Received headers"""
-        if not self.received_headers or len(self.received_headers) < 1:
-            return 0
-        
-        # Look for suspicious patterns in received headers
-        suspicious_count = 0
-        for header in self.received_headers:
-            header_lower = header.lower() if isinstance(header, str) else ""
-            # Check for unusual routing or spoofed IPs
-            if 'unknown' in header_lower or '[127.0.0.1]' in header_lower or '[0.0.0.0]' in header_lower:
-                suspicious_count += 1
-        
-        return suspicious_count
-
-    def has_x_originating_ip(self):
-        """Check if X-Originating-IP header exists (Gmail/Office)"""
-        return 1 if self.x_originating_ip else 0
-
-    def has_arc_headers(self):
-        """Check if ARC headers are present (authenticated routing)"""
-        arc_count = 0
-        if self.arc_seal:
-            arc_count += 1
-        if self.arc_message_signature:
-            arc_count += 1
-        if self.arc_authentication_results:
-            arc_count += 1
-        return arc_count
-
-    def forwarding_indicators(self):
-        """Check for forwarding headers (X-Forwarded-For, X-Forwarded-Encrypted)"""
-        count = 0
-        if self.x_forwarded_for:
-            count += 1
-        if self.x_forwarded_encrypted:
-            count += 1
-        return count
-
-    def missing_message_id(self):
-        """Check if Message-ID is missing (red flag)"""
-        return 0 if self.message_id else 1
-
-    def has_suspicious_mailer(self):
-        """Check for suspicious X-Mailer values"""
-        if not self.x_mailer:
-            return 0
-        
-        suspicious_mailers = ['php', 'perl', 'python', 'java', 'vbscript', 'unknown']
-        x_mailer_lower = self.x_mailer.lower()
-        
-        return 1 if any(mailer in x_mailer_lower for mailer in suspicious_mailers) else 0
-
-    def get_features(self):
-        """Get dictionary with all header features"""
-        return {
-            # Basic header checks
-            'has_from_address': self.has_from_address(),
-            'has_to_address': self.has_to_address(),
-            'from_to_mismatch': self.from_to_mismatch(),
-            'reply_to_mismatch': self.reply_to_mismatch(),
-            'from_contains_suspicious': self.from_contains_suspicious_keywords(),
-            'subject_urgency_count': self.subject_urgency_indicators(),
-            'subject_phishing_keywords': self.subject_suspicious_keywords(),
-            'cc_bcc_empty': self.cc_bcc_empty(),
-            'to_multiple_recipients': self.to_multiple_recipients(),
-            'subject_length': self.subject_length(),
-            'subject_entropy': self.subject_entropy(),
-            'from_is_ip': self.from_is_ip_address(),
-            'display_name_mismatch': self.has_display_name_mismatch(),
-            # Authentication header checks
-            'return_path_mismatch': self.return_path_mismatch(),
-            'delivered_to_mismatch': self.delivered_to_mismatch(),
-            'dkim_signature_present': self.dkim_pass(),
-            'spf_verification': self.spf_pass(),
-            'dmarc_verification': self.dmarc_pass(),
-            'multiple_received_headers': self.multiple_received_headers(),
-            'suspicious_received_chain': self.suspicious_received_chain(),
-            'has_x_originating_ip': self.has_x_originating_ip(),
-            'arc_headers_count': self.has_arc_headers(),
-            'forwarding_indicators': self.forwarding_indicators(),
-            'missing_message_id': self.missing_message_id(),
-            'suspicious_mailer': self.has_suspicious_mailer(),
+        # --- 7. Domain Matching ---
+        doms = {
+            'message-id': self._get_domains(headers.get('message-id', '')),
+            'from': self._get_domains(headers.get('from', '')),
+            'return-path': self._get_domains(headers.get('return-path', '')),
+            'sender': self._get_domains(headers.get('sender', '')),
+            'reply-to': self._get_domains(headers.get('reply-to', '')),
+            'to': self._get_domains(headers.get('to', '')),
+            'in-reply-to': self._get_domains(headers.get('in-reply-to', '')),
+            'errors-to': self._get_domains(headers.get('errors-to', '')),
+            'references': self._get_domains(headers.get('references', ''))
         }
+
+        features['domain_val_message-id'] = 1 if any('uwaterloo.ca' in d for d in doms['message-id']) else 0
+
+        matches_to_check = [
+            ('message-id', 'from'), ('from', 'return-path'), ('message-id', 'return-path'),
+            ('message-id', 'sender'), ('message-id', 'reply-to'), ('return-path', 'reply-to'),
+            ('reply-to', 'to'), ('to', 'in-reply-to'), ('errors-to', 'message-id'),
+            ('errors-to', 'from'), ('errors-to', 'sender'), ('errors-to', 'reply-to'),
+            ('sender', 'from'), ('references', 'reply-to'), ('references', 'in-reply-to'),
+            ('references', 'to'), ('from', 'reply-to'), ('to', 'from'), ('to', 'message-id')
+        ]
+
+        for f1, f2 in matches_to_check:
+            features[f'domain_match_{f1}_{f2}'] = self._domain_match(doms[f1], doms[f2])
+
+        # Email match check
+        features['email_match_from_reply-to'] = 1 if any(e1 == e2 for e1 in re.findall(r'([a-zA-Z0-9+._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)', headers.get('from', '')) for e2 in re.findall(r'([a-zA-Z0-9+._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)', headers.get('reply-to', ''))) else 0
+
+        # Conseq logic fallback (Uses regex for speed over full parser in single-instance)
+        features['conseq_num_received_is_one'] = 1 if raw_hops == 1 else 0
+        features['conseq_received_good'] = 1 if raw_hops > 1 else 0
 

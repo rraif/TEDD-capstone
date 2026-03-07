@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from email import policy
 from urllib.parse import urlparse
 from typing import List, Dict
-from features import HTMLFeatures, URLFeatures
+from features import HTMLFeatures, URLFeatures, TeddFeatureExtractor
 from collections import Counter
 from dotenv import load_dotenv
 import shap
@@ -38,6 +38,7 @@ else:
 BERT_MODEL_PATH = "./tedd_bert_final"
 URL_MODEL_PATH = "./URLClassifier.joblib"
 HTML_MODEL_PATH = "./HTMLClassifier.joblib"
+XGB_HEADER_MODEL_PATH = "./tedd_xgb_model.joblib"
 EXPECTED_KEY = os.environ["INTERNAL_API_KEY"]
 
 # Load BERT Model
@@ -63,6 +64,14 @@ try:
     if html_model: logging.info("✅ HTML Model loaded successfully!")
 except Exception as e:
     logging.error(f"❌ Error loading HTML model: {e}")
+
+# Load XGBoost Header Model
+try:
+    xgb_header_model = joblib.load(XGB_HEADER_MODEL_PATH) if os.path.exists(XGB_HEADER_MODEL_PATH) else None
+    if xgb_header_model: logging.info("✅ XGBoost Header Model loaded successfully!")
+except Exception as e:
+    logging.error(f"❌ Error loading XGBoost Header model: {e}")
+    xgb_header_model = None
 
 app = FastAPI()
 
@@ -306,6 +315,51 @@ def predict_html_features(html_text: str) -> Dict:
     except Exception as e:
         return {"model": "HTML", "error": str(e)}
 
+def predict_header_features(raw_email: str) -> Dict:
+    if not xgb_header_model: return {"model": "Header", "error": "Model not loaded"}
+    try:
+        feature_extractor = TeddFeatureExtractor()
+        features_dict = feature_extractor.extract(raw_email)
+        
+        # Convert to ordered list based on feature_extractor.feature_names
+        feature_values = [features_dict.get(name, 0.0) for name in feature_extractor.feature_names]
+        feature_array = np.array([feature_values])
+        
+        prediction = xgb_header_model.predict(feature_array)[0]
+        probabilities = xgb_header_model.predict_proba(feature_array)[0]
+        confidence = float(max(probabilities))
+        
+        result = "Phishing" if int(prediction) == 1 else "Legitimate"
+        raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
+        
+        # ==========================================
+        # SHAP: Extract feature importance for LLaMA
+        # ==========================================
+        explainer = shap.TreeExplainer(xgb_header_model)
+        shap_values = explainer.shap_values(feature_array)
+        
+        if isinstance(shap_values, list):
+            instance_shap_values = shap_values[1][0]
+        else:
+            instance_shap_values = shap_values[0]
+
+        shap_explanation_data = [
+            {"feature": feat, "shap_value": float(val)} 
+            for feat, val in zip(feature_extractor.feature_names, instance_shap_values)
+        ]
+        shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+        
+        return {
+            "model": "Header",
+            "prediction": result,
+            "confidence": round(float(confidence), 4),
+            "raw_risk": float(raw_risk),
+            "shap_explanation": shap_explanation_data[:5]
+        }
+    except Exception as e:
+        logging.error(f"Error in header prediction: {e}")
+        return {"model": "Header", "error": str(e)}
+
 # ============================================================
 # LLM EXPLANATION GENERATION (LLaMA)
 # ============================================================
@@ -506,6 +560,9 @@ async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = 
             body_text = BeautifulSoup(parsed_email["html"], "html.parser").get_text(separator=' ', strip=True)
 
         combined_text = f"{subject} {body_text}".strip()
+        
+        # Add header prediction
+        predictions.append(predict_header_features(raw_email.email_content))
         
         if combined_text: predictions.append(predict_text_bert(combined_text))
         if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"]))
