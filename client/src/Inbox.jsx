@@ -1,4 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+
+// 🚀 Helper function to cleanly calculate threat status
+const getThreatStatus = (verdict, confidence) => {
+  const conf = confidence || 0;
+  if (verdict === 'Phishing' && conf >= 0.70) return 'Phishing';
+  if (verdict === 'Phishing' && conf < 0.70) return 'Suspicious';
+  if (verdict === 'Legitimate' && conf <= 0.60) return 'Suspicious';
+  return 'Safe';
+};
 
 const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [emails, setEmails] = useState(null);
@@ -6,7 +15,24 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   const [showHeadersOnly, setShowHeadersOnly] = useState(false); 
   const [scanResult, setScanResult] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [isExplaining, setIsExplaining] = useState(false);
+  
+  // 🛡️ Reference to track the current active session
+  const abortControllerRef = useRef(null);
   const apiURL = import.meta.env.VITE_API_URL;
+
+  // Helper to cancel any ongoing requests
+  const cancelOngoingRequests = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => cancelOngoingRequests();
+  }, []);
 
   // 🛡️ BULLETPROOF FETCH: Prevents the White Screen of Death
   useEffect(() => {
@@ -17,7 +43,7 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
       .then(data => {
         if (data.error) {
           console.error("API Error:", data.error);
-          setEmails([]); // Fall back to empty array to prevent .map() crashes!
+          setEmails([]); 
         } else if (data.emails){
           setEmails(data.emails);
         } else if (Array.isArray(data)) {
@@ -63,12 +89,19 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   };
 
   const openEmail = async (emailPreview) => {
+    // 1. STOP EVERYTHING IMMEDIATELY
+    cancelOngoingRequests();
+    
+    // 2. Create a new controller for this specific session
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const { signal } = controller;
+
     try {
       setScanResult(null);
       setIsScanning(true);
       setShowHeadersOnly(false);
 
-      // 🚀 SKELETON LOADER: Instant transition using list data!
       setSelectedEmail({
         basic: {
           id: emailPreview.id,
@@ -88,32 +121,66 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
         headers: []
       });
 
-      const res = await fetch(`${apiURL}/api/emails/${emailPreview.id}`, { credentials: 'include' });
+      const res = await fetch(`${apiURL}/api/emails/${emailPreview.id}`, { 
+        credentials: 'include',
+        signal 
+      });
       const fullData = await res.json();
       
+      // 3. Safety Check: If signal is aborted, don't update state
+      if (signal.aborted) return;
       setSelectedEmail(fullData);
 
-      // AI Scanner
+      // 🚀 TWO-STAGE INFERENCE PIPELINE
       fetch(`${apiURL}/api/scan`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emailId: emailPreview.id }),
-          credentials: 'include'
+          credentials: 'include',
+          signal 
       })
-      .then (res => {
+      .then(res => {
         if (!res.ok) throw new Error("Network response was not ok");
         return res.json();
       })
-      .then(scanData =>{
+      .then(scanData => {
+        if (signal.aborted) return; // Exit if user clicked away
+
         setScanResult(scanData);
         setIsScanning(false);
+
+        const status = getThreatStatus(scanData.verdict, scanData.confidence);
+
+        if (status === 'Phishing' || status === 'Suspicious') {
+            setIsExplaining(true);
+            fetch(`${apiURL}/api/explain`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emailId: emailPreview.id }),
+                credentials: 'include',
+                signal 
+            })
+            .then(res => res.json())
+            .then(explainData => {
+                if (signal.aborted) return; // Exit if user clicked away
+                setScanResult(prev => ({ ...prev, explanation: explainData }));
+                setIsExplaining(false);
+            })
+            .catch(err => {
+                if (err.name === 'AbortError') return;
+                console.error("XAI failed", err);
+                setIsExplaining(false);
+            });
+        }
       })
       .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error("Auto scan failed", err);
         setIsScanning(false);
       });
 
     } catch (err) {
+      if (err.name === 'AbortError') return;
       console.error('Failed to open email', err);
     }
   };
@@ -140,19 +207,12 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                 i % 2 === 0 ? 'bg-[#020617]' : 'bg-[#0F172A]'
               }`}
             >
-              {/* Checkbox Placeholder */}
               <div className="w-4 h-4 rounded bg-slate-700/40"></div>
-              
-              {/* Sender Placeholder */}
               <div className="w-48 h-4 bg-slate-700/40 rounded"></div>
-              
-              {/* Subject & Snippet Placeholder */}
               <div className="flex-1 flex items-center gap-3">
                 <div className="h-4 w-1/3 bg-slate-600/40 rounded"></div>
                 <div className="h-4 w-1/2 bg-slate-800/60 rounded"></div>
               </div>
-
-              {/* Date Placeholder */}
               <div className="w-16 h-4 bg-slate-700/40 rounded"></div>
             </div>
           ))}
@@ -167,10 +227,12 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
   if (selectedEmail) {
     return (
       <div className="bg-[#020617] min-h-full flex flex-col">
-        {/* Top Navigation Bar */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 sticky top-0 bg-[#020617] z-20 shadow-md">         
           <button 
-            onClick={() => setSelectedEmail(null)}
+            onClick={() => {
+              cancelOngoingRequests(); // STOP SCANS ON BACK
+              setSelectedEmail(null);
+            }}
             className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-slate-800"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -188,10 +250,6 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
               className="flex items-center gap-2 text-green-400 hover:text-green-300 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 transition-colors px-3 py-1.5 rounded text-sm font-medium"
             >
               Restore to Inbox
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
             </button>
           ) : (
             <button 
@@ -202,17 +260,11 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
               className="flex items-center gap-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-colors px-3 py-1.5 rounded text-sm font-medium"
             >
               Mark as Unsafe
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-              </svg>
             </button>
           )}
         </div> 
 
-        {/* 🚀 THE NEW SPLIT LAYOUT */}
         <div className="p-8 max-w-full mx-auto flex flex-col xl:flex-row gap-8 items-start w-full">
-          
-          {/* LEFT COLUMN: The actual email content */}
           <div className="flex-1 min-w-0 w-full xl:w-[calc(100%-320px)]">
             <h2 className="text-3xl font-normal text-white mb-6 break-words">
               {selectedEmail.basic.subject}
@@ -251,29 +303,17 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                 <div className="text-xs text-slate-500 mb-4 font-bold uppercase tracking-wider border-b border-slate-800 pb-2">
                   Original Message Headers
                 </div>
-                
                 <div className="text-xs font-mono flex flex-col gap-1.5 min-w-[600px] mb-8">
                   {selectedEmail.headers.map((header, index) => {
                     const authenticValue = header.value.replace(/(\s{2,}|\t+)/g, '\n$1'); 
                     return (
                       <div key={index} className="grid grid-cols-[160px_1fr] gap-4 hover:bg-slate-800/50 p-1 rounded transition-colors">
-                        <div className="text-slate-400 font-semibold text-right mt-0.5">
-                          {header.name}:
-                        </div>
-                        <div className="text-slate-200 break-words whitespace-pre-wrap leading-relaxed">
-                          {authenticValue}
-                        </div>
+                        <div className="text-slate-400 font-semibold text-right mt-0.5">{header.name}:</div>
+                        <div className="text-slate-200 break-words whitespace-pre-wrap leading-relaxed">{authenticValue}</div>
                       </div>
                     );
                   })}
                 </div>
-
-                <div className="text-xs text-slate-500 mb-4 font-bold uppercase tracking-wider border-b border-slate-800 pb-2">
-                  Raw MIME Payload
-                </div>
-                <pre className="text-xs text-slate-400 font-mono whitespace-pre-wrap break-words leading-relaxed min-w-[600px]">
-                  {selectedEmail.rawMimeBody}
-                </pre>
               </div>
             )}
 
@@ -288,7 +328,6 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
             </div>
           </div>
 
-{/* RIGHT COLUMN: The AI Security Inspector Panel */}
           <div className="w-full xl:w-80 shrink-0 sticky top-20">
             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4 border-b border-slate-800/80 pb-2">
               Security Analysis
@@ -301,70 +340,50 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 <div className="space-y-2 animate-pulse">
-                  <div className="font-bold">Scanning Payload</div>
-                  <div className="text-xs opacity-70">Running Context Engine...</div>
+                  <div className="font-bold">Scanning Email</div>
                 </div>
               </div>
             )}
 
             {!isScanning && scanResult && (() => {
-              // 🚀 BULLETPROOF LOGIC (Bypasses the Node.js Middleware issue)
-              // The Express server drops "threat_level", so we must mathematically 
-              // reconstruct the 3 tiers using ONLY "verdict" and "confidence".
-              
-              let status = 'Safe';
-              const isPhishing = scanResult.verdict === 'Phishing';
+              const status = getThreatStatus(scanResult.verdict, scanResult.confidence);
               const conf = scanResult.confidence || 0;
-              
-              if (isPhishing && conf >= 0.70) {
-                status = 'Phishing';   // Raw risk was 0.70 or higher
-              } else if (isPhishing && conf < 0.70) {
-                status = 'Suspicious'; // Raw risk was between 0.50 and 0.69
-              } else if (!isPhishing && conf <= 0.60) {
-                status = 'Suspicious'; // Raw risk was between 0.40 and 0.49
-              }
 
               return (
                 <>
-                  {/* 1. The Main Verdict Card */}
                   <div className={`flex flex-col items-center p-6 rounded-lg border shadow-lg text-center ${
-                    status === 'Phishing' 
-                      ? 'bg-red-950/40 border-red-500/50 text-red-200' 
-                      : status === 'Suspicious'
-                      ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
-                      : 'bg-green-950/40 border-green-500/50 text-green-200'
+                    status === 'Phishing' ? 'bg-red-950/40 border-red-500/50 text-red-200' 
+                    : status === 'Suspicious' ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+                    : 'bg-green-950/40 border-green-500/50 text-green-200'
                   }`}>
                     <h3 className="font-bold text-xl mb-3">
-                      {status === 'Phishing' ? "Phishing Detected" 
-                        : status === 'Suspicious' ? "Suspicious Activity" 
-                        : "Nothing Detected"}
+                      {status === 'Phishing' ? "Phishing Detected" : status === 'Suspicious' ? "Suspicious Activity" : "Nothing Detected"}
                     </h3>
-                    
-                    {/* UI DISPLAYS THE CONFIDENCE SCORE */}
                     <div className="text-sm opacity-90 font-mono bg-black/20 px-4 py-1.5 rounded border border-white/10">
                       Confidence: {(conf * 100).toFixed(1)}%
                     </div>
                   </div>
 
-                  {/* 2. The Explainable AI Box */}
                   {(status === 'Phishing' || status === 'Suspicious') && (
                     <div className="mt-4 bg-[#020617] border border-slate-800 rounded-lg p-5 shadow-lg relative overflow-hidden">
-                      <div className={`absolute top-0 left-0 right-0 h-1 opacity-50 bg-gradient-to-r ${
-                        status === 'Phishing' ? 'from-red-500 to-purple-500' : 'from-amber-500 to-yellow-500'
-                      }`}></div>
-                      
-                      <div className={`mb-3 font-bold text-xs uppercase tracking-wider mt-1 ${
-                        status === 'Phishing' ? 'text-purple-400' : 'text-amber-400'
-                      }`}>
+                      <div className={`absolute top-0 left-0 right-0 h-1 opacity-50 bg-gradient-to-r ${status === 'Phishing' ? 'from-red-500 to-purple-500' : 'from-amber-500 to-yellow-500'}`}></div>
+                      <div className={`mb-3 font-bold text-xs uppercase tracking-wider mt-1 ${status === 'Phishing' ? 'text-purple-400' : 'text-amber-400'}`}>
                         {status === 'Phishing' ? 'Phishing Explanation' : 'Why is this Suspicious?'}
                       </div>
                       
-                      <p className="text-slate-400 text-sm leading-relaxed">
-                        {status === 'Suspicious' 
-                          ? "Suspicious Explanation goes here"
-                          : "Phishing explanation goes here"
-                        }
-                      </p>
+                      {isExplaining ? (
+                          <div className="flex flex-col items-center justify-center py-6 space-y-4">
+                              <svg className="animate-spin h-8 w-8 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              <div className="text-xs text-slate-400 font-mono animate-pulse">Running Deep Analysis...</div>
+                          </div>
+                      ) : (
+                          <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">
+                              {scanResult.explanation?.human_readable_explanation || "Unable to generate detailed explanation."}
+                          </p>
+                      )}
                     </div>
                   )}
                 </>
@@ -376,9 +395,6 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
     );
   }
 
-  // ==========================================
-  // VIEW 2: EMAIL LIST (INBOX VIEW)
-  // ==========================================
   return (
     <div className="bg-[#0F172A] min-h-full">
      <div className="flex flex-col">
@@ -391,28 +407,18 @@ const Inbox = ({viewType ='inbox', apiEndpoint = '/api/emails'}) => {
             <div 
               key={email.id} 
               onClick={() => openEmail(email)}
-              className={`group flex items-center gap-4 px-4 py-2.5 border-b border-slate-800/80 hover:bg-slate-800/60 hover:shadow-sm transition-all cursor-pointer ${
+              className={`group flex items-center gap-4 px-4 py-2.5 border-b border-slate-800/80 hover:bg-slate-800/60 transition-all cursor-pointer ${
                 index % 2 === 0 ? 'bg-[#020617]' : 'bg-[#0F172A]'
               }`}
             >
-              <div className="flex items-center gap-3 text-slate-500">
-                <input 
-                  type="checkbox" 
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 cursor-pointer"
-                  onClick={(e) => e.stopPropagation()} 
-                />
-              </div>
-
               <div className="w-48 font-bold text-slate-200 truncate text-sm">
                 {formatSender(email.from)}
               </div>
-
               <div className="flex-1 truncate text-sm">
                 <span className="font-bold text-slate-200">{email.subject}</span>
                 <span className="text-slate-500 mx-2">-</span>
                 <span className="text-slate-400">{email.snippet}</span>
               </div>
-
               <div className="w-20 text-right text-sm font-bold text-slate-300 whitespace-nowrap">
                 {formatDate(email.date)}
               </div>

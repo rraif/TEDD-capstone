@@ -46,6 +46,15 @@ services:
     depends_on:
       - server
 
+  genai-service:
+    build: ./genai-service
+    ports:
+      - "${GEN_AI_PORT}:${GEN_AI_PORT}" 
+    env_file:
+      - .env
+    volumes:
+      - ./genai-service:/app
+
   # 4. Cloudflare Post-Quantum Tunnel
   cloudflared:
     image: cloudflare/cloudflared:latest
