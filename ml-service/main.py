@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request # 🚀 Added Request
 from pydantic import BaseModel
 from transformers import BertForSequenceClassification, BertTokenizer
 import torch
@@ -179,7 +179,6 @@ def predict_text_bert(text: str, run_xai: bool = False) -> Dict:
                     lime_probs = F.softmax(bert_model(**lime_inputs).logits / temperature, dim=1).numpy()
                 return lime_probs
 
-            # 🚀 SPEED FIX: num_samples=500
             exp = lime_text_explainer.explain_instance(clean_text, predictor_for_lime, num_features=5, num_samples=500)
             result_dict["lime_explanation"] = [{"word": word, "weight": float(weight)} for word, weight in exp.as_list()]
 
@@ -316,7 +315,6 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
         'HTML': scores.get('HTML', {}).get('raw_risk', 0.0)
     }
     
-    # 🚀 YOUR EXISTING BASE WEIGHTS
     base_weights = {'URL': 0.40, 'BERT': 0.40, 'HTML': 0.20}
     dynamic_weights = base_weights.copy()
 
@@ -336,45 +334,33 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
     if url_list:
         print(f"🔗 URLs Analyzed: {url_list}")
 
-    # ============================================================
-    # 🚀 NEW HEURISTIC: Zero-Payload Structural Anchor
-    # ============================================================
-    # If there are no links and minimal HTML, technical models have no evidence.
-    # We shift priority to BERT to catch Social Engineering/BEC scams.
     is_zero_payload = (url_count == 0 and html_tag_count < 10)
     
     if is_zero_payload:
         print("🚩 HEURISTIC: Zero-Payload detected. Shifting weight to BERT.")
         dynamic_weights = {'URL': 0.05, 'BERT': 0.90, 'HTML': 0.05}
-        # If BERT also has a high-confidence "gut feeling" for a plain-text request
         if risks['BERT'] > 0.40:
              dynamic_weights['BERT'] = 0.95
-    # ============================================================
 
-    # 🚀 YOUR ORIGINAL HEURISTICS (PRESERVED)
-    # HEURISTIC 1: Tracker Override
+    # HEURISTICS
     if risks['BERT'] < 0.25 and risks['URL'] > 0.60:
         dynamic_weights['URL'] = dynamic_weights['URL'] * 0.2  
 
-    # HEURISTIC 3: Financial Newsletter Override
     if risks['URL'] < 0.50 and risks['HTML'] < 0.60 and risks['BERT'] > 0.80:
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1 
         dynamic_weights['URL'] = dynamic_weights['URL'] * 1.5
         bert_muted = True
 
-    # HEURISTIC 4: Marketing Bloat 
     if url_count >= 8 and html_tag_count > 50 and risks['URL'] < 0.60:
         dynamic_weights['HTML'] = dynamic_weights['HTML'] * 0.1 
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1
         bert_muted = True
         marketing_email = True
 
-    # HEURISTIC 5: Policy Novel 
     if word_count > 300 and url_count <= 3 and risks['BERT'] > 0.60:
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.5 
         bert_muted = True
 
-    # HEURISTIC 6: Enterprise Unsubscribe/API 
     url_str = url_list[0].lower() if url_list else ""
     enterprise_markers = ['/unsubscribe', '/api/', '/v1/', '/v2/', '/preferences', '/opt-out']
     is_enterprise_path = any(marker in url_str for marker in enterprise_markers)
@@ -384,7 +370,6 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.2
         bert_muted = True
 
-    # HEURISTIC 7: Social Matrix Risk Anchor
     if url_count >= 10 and unique_domains >= 5 and html_tag_count > 100:
         risks['URL'] = min(risks['URL'], 0.20) 
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.05 
@@ -428,7 +413,11 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
 
 # 1. The Fast Base Scan
 @app.post("/parse-and-predict")
-async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = Header(None)):
+async def parse_and_predict_endpoint(
+    request: Request,                   # 🚀 Added Request
+    raw_email: RawEmailInput, 
+    x_api_key: str = Header(None)
+):
     if x_api_key != EXPECTED_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized internal request")
     
@@ -444,7 +433,7 @@ async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = 
     combined_text = f"{subject} {body_text}".strip()
     
     predictions = []
-    # run_xai defaults to False! It will be lightning fast.
+    # Fast scan - no XAI
     if combined_text: predictions.append(predict_text_bert(combined_text))
     if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"]))
     if parsed_email["html"]: predictions.append(predict_html_features(parsed_email["html"]))
@@ -452,9 +441,13 @@ async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = 
     total_result = calculate_total_phishing_score(predictions, parsed_email.get("is_spoofed", False))
     return {"combined_analysis": total_result}
 
-# 2. The Deep XAI Analysis
+# 2. The Deep XAI Analysis (THE SLOW ENDPOINT)
 @app.post("/explain-threat")
-async def explain_threat_endpoint(raw_email: RawEmailInput, x_api_key: str = Header(None)):
+async def explain_threat_endpoint(
+    request: Request,                   # 🚀 Added Request
+    raw_email: RawEmailInput, 
+    x_api_key: str = Header(None)
+):
     if x_api_key != EXPECTED_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized internal request")
     
@@ -470,22 +463,29 @@ async def explain_threat_endpoint(raw_email: RawEmailInput, x_api_key: str = Hea
     combined_text = f"{subject} {body_text}".strip()
     is_spoofed = parsed_email.get("is_spoofed", False)
 
+    # 🚀 DISCONNECTION CHECK 1: Before expensive LIME/SHAP
+    if await request.is_disconnected():
+        logging.info("🚀 Client disconnected before XAI logic. Skipping.")
+        return {"status": "cancelled"}
+
     predictions = []
     if combined_text: predictions.append(predict_text_bert(combined_text, run_xai=True))
     if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"], run_xai=True))
     if parsed_email["html"]: predictions.append(predict_html_features(parsed_email["html"], run_xai=True))
     
-    # 🚀 NEW: Grab ONLY the top 3 phishing words. Ignore HTML/URL for the text summary entirely.
+    # Grab top phishing words
     bad_words = []
     for p in predictions:
         if p.get("model") == "BERT" and "lime_explanation" in p:
-            # Filter to only words that pushed the score toward phishing (weight > 0)
             pos_words = [item for item in p["lime_explanation"] if item["weight"] > 0]
-            # Sort by highest weight and grab the top 3
             pos_words.sort(key=lambda x: x["weight"], reverse=True)
             bad_words = [item["word"] for item in pos_words[:3]]
 
-    # 🚀 The "Psychological Threat" Prompt
+    # 🚀 DISCONNECTION CHECK 2: Before expensive Groq Call
+    if await request.is_disconnected():
+        logging.info("🚀 Client disconnected before Groq call. Skipping.")
+        return {"status": "cancelled"}
+
     prompt = f"""
     You are a cybersecurity AI explaining a phishing alert to a non-technical user.
     
