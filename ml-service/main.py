@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request # 🚀 Added Request
 from pydantic import BaseModel
 from transformers import BertForSequenceClassification, BertTokenizer
 import torch
@@ -113,7 +113,7 @@ def parse_raw_email(raw_email: str) -> Dict:
         if html_content:
             soup = BeautifulSoup(html_content, "html.parser")
             for a in soup.find_all('a', href=True):
-                href = a['href'].strip().strip('\'"')
+                href = a.get('href', '').strip().strip('\'"')
                 text = a.get_text(strip=True)
                 urls.append(href)
                 
@@ -124,15 +124,10 @@ def parse_raw_email(raw_email: str) -> Dict:
                         ext_text = tldextract.extract(clean_text)
                         ext_href = tldextract.extract(href)
                         
-                        # 1. Verify the visible text is a real domain
                         if ext_text.domain and ext_text.suffix:
                             text_base = f"{ext_text.domain}.{ext_text.suffix}"
-                            
-                            # 2. Verify the hidden link actually contains a domain or IP address
                             if ext_href.domain: 
                                 href_base = f"{ext_href.domain}.{ext_href.suffix}" if ext_href.suffix else ext_href.domain
-                                
-                                # 3. Compare them
                                 if text_base != href_base:
                                     print(f"🚩 SPOOF CAUGHT: Visible Text '{text_base}' -> Hidden Link '{href_base}'")
                                     is_spoofed = True
@@ -158,10 +153,10 @@ def parse_raw_email(raw_email: str) -> Dict:
         return {"parsing_status": "error", "error": str(e)}
 
 # ============================================================
-# PREDICTION FUNCTIONS
+# PREDICTION FUNCTIONS (Two-Stage Architecture)
 # ============================================================
 
-def predict_text_bert(text: str) -> Dict:
+def predict_text_bert(text: str, run_xai: bool = False) -> Dict:
     if not bert_model: return {"model": "BERT", "error": "Model not loaded"}
     try:
         word_count = len(text.split())
@@ -178,31 +173,29 @@ def predict_text_bert(text: str) -> Dict:
         result = "Phishing" if predicted_class.item() == 1 else "Legitimate"
         raw_risk = confidence.item() if result == "Phishing" else (1.0 - confidence.item())
 
-        # ==========================================
-        # LIME: Extract word importance for LLaMA
-        # ==========================================
-        def predictor_for_lime(texts):
-            lime_inputs = tokenizer(texts, return_tensors="pt", truncation=True, padding=True, max_length=512)
-            with torch.no_grad():
-                lime_outputs = bert_model(**lime_inputs)
-                lime_probs = F.softmax(lime_outputs.logits / temperature, dim=1).numpy()
-            return lime_probs
-
-        exp = lime_text_explainer.explain_instance(clean_text, predictor_for_lime, num_features=5)
-        lime_explanation_data = [{"word": word, "weight": float(weight)} for word, weight in exp.as_list()]
-
-        return {
+        result_dict = {
             "model": "BERT", 
             "prediction": result, 
             "confidence": round(float(confidence.item()), 4), 
             "raw_risk": float(raw_risk), 
-            "word_count": word_count,
-            "lime_explanation": lime_explanation_data
+            "word_count": word_count
         }
+
+        if run_xai:
+            def predictor_for_lime(texts):
+                lime_inputs = tokenizer(texts, return_tensors="pt", truncation=True, padding=True, max_length=512)
+                with torch.no_grad():
+                    lime_probs = F.softmax(bert_model(**lime_inputs).logits / temperature, dim=1).numpy()
+                return lime_probs
+
+            exp = lime_text_explainer.explain_instance(clean_text, predictor_for_lime, num_features=5, num_samples=500)
+            result_dict["lime_explanation"] = [{"word": word, "weight": float(weight)} for word, weight in exp.as_list()]
+
+        return result_dict
     except Exception as e:
         return {"model": "BERT", "error": str(e)}
 
-def predict_url_features(urls: List[str]) -> Dict:
+def predict_url_features(urls: List[str], run_xai: bool = False) -> Dict:
     if not url_model: return {"model": "URL", "error": "Model not loaded"}
     try:
         if not urls: return {"model": "URL", "prediction": "Legitimate", "confidence": 0.0, "raw_risk": 0.0}
@@ -223,7 +216,6 @@ def predict_url_features(urls: List[str]) -> Dict:
             confidence = float(max(probabilities))
             risk = confidence if prediction == 1 else (1.0 - confidence)
 
-            # Frequency dampener
             if domain_counts[urlparse(url).netloc.lower()] >= 3:
                 risk = risk * 0.4
             
@@ -239,9 +231,18 @@ def predict_url_features(urls: List[str]) -> Dict:
         max_risk = max(all_results)
         final_prediction = "Phishing" if max_risk >= 0.5 else "Legitimate"
         display_confidence = max_risk if final_prediction == "Phishing" else (1.0 - max_risk)
+
+        result_dict = {
+            "model": "URL", 
+            "prediction": final_prediction, 
+            "confidence": round(float(display_confidence), 4), 
+            "raw_risk": max_risk, 
+            "urls_analyzed": len(urls), 
+            "unique_domains": unique_domains,
+            "extracted_urls": urls
+        }
             
-        shap_explanation_data = []
-        if riskiest_features_dict:
+        if run_xai and riskiest_features_dict:
             feature_names = list(riskiest_features_dict.keys())
             feature_values = list(riskiest_features_dict.values())
             
@@ -258,20 +259,13 @@ def predict_url_features(urls: List[str]) -> Dict:
                 for feat, val in zip(feature_names, instance_shap_values)
             ]
             shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+            result_dict["shap_explanation"] = shap_explanation_data[:5]
 
-        return {
-            "model": "URL", 
-            "prediction": final_prediction, 
-            "confidence": round(float(display_confidence), 4), 
-            "raw_risk": max_risk, 
-            "urls_analyzed": len(urls), 
-            "unique_domains": unique_domains,
-            "extracted_urls": urls
-        }
+        return result_dict
     except Exception as e:
         return {"model": "URL", "error": str(e)}
 
-def predict_html_features(html_text: str) -> Dict:
+def predict_html_features(html_text: str, run_xai: bool = False) -> Dict:
     if not html_model: return {"model": "HTML", "error": "Model not loaded"}
     try:
         if not html_text.strip(): return {"model": "HTML", "prediction": "No HTML", "confidence": 0.0, "raw_risk": 0.0}
@@ -286,143 +280,37 @@ def predict_html_features(html_text: str) -> Dict:
         
         result = "Phishing" if int(prediction) == 1 else "Legitimate"
         raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
-        
-        # ==========================================
-        # SHAP: Extract feature importance for LLaMA
-        # ==========================================
-        explainer = shap.TreeExplainer(html_model)
-        shap_values = explainer.shap_values(np.array([feature_values]))
-        
-        if isinstance(shap_values, list):
-            instance_shap_values = shap_values[1][0]
-        else:
-            instance_shap_values = shap_values[0]
 
-        shap_explanation_data = [
-            {"feature": feat, "shap_value": float(val)} 
-            for feat, val in zip(feature_names, instance_shap_values)
-        ]
-        shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
-        
-        return {
+        result_dict = {
             "model": "HTML", 
             "prediction": result, 
             "confidence": round(confidence, 4), 
             "raw_risk": float(raw_risk), 
-            "html_tag_count": tag_count,
-            "shap_explanation": shap_explanation_data[:5] # <- Added for LLaMA
+            "html_tag_count": tag_count
         }
+        
+        if run_xai:
+            explainer = shap.TreeExplainer(html_model)
+            shap_values = explainer.shap_values(np.array([feature_values]))
+            
+            if isinstance(shap_values, list):
+                instance_shap_values = shap_values[1][0]
+            else:
+                instance_shap_values = shap_values[0]
+
+            shap_explanation_data = [
+                {"feature": feat, "shap_value": float(val)} 
+                for feat, val in zip(feature_names, instance_shap_values)
+            ]
+            shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+            result_dict["shap_explanation"] = shap_explanation_data[:5]
+            
+        return result_dict
     except Exception as e:
         return {"model": "HTML", "error": str(e)}
 
-def predict_header_features(raw_email: str) -> Dict:
-    if not xgb_header_model: return {"model": "Header", "error": "Model not loaded"}
-    try:
-        feature_extractor = TeddFeatureExtractor()
-        features_dict = feature_extractor.extract(raw_email)
-        
-        # Convert to ordered list based on feature_extractor.feature_names
-        feature_values = [features_dict.get(name, 0.0) for name in feature_extractor.feature_names]
-        feature_array = np.array([feature_values])
-        
-        prediction = xgb_header_model.predict(feature_array)[0]
-        probabilities = xgb_header_model.predict_proba(feature_array)[0]
-        confidence = float(max(probabilities))
-        
-        result = "Phishing" if int(prediction) == 1 else "Legitimate"
-        raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
-        
-        # ==========================================
-        # SHAP: Extract feature importance for LLaMA
-        # ==========================================
-        explainer = shap.TreeExplainer(xgb_header_model)
-        shap_values = explainer.shap_values(feature_array)
-        
-        if isinstance(shap_values, list):
-            instance_shap_values = shap_values[1][0]
-        else:
-            instance_shap_values = shap_values[0]
-
-        shap_explanation_data = [
-            {"feature": feat, "shap_value": float(val)} 
-            for feat, val in zip(feature_extractor.feature_names, instance_shap_values)
-        ]
-        shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
-        
-        return {
-            "model": "Header",
-            "prediction": result,
-            "confidence": round(float(confidence), 4),
-            "raw_risk": float(raw_risk),
-            "shap_explanation": shap_explanation_data[:5]
-        }
-    except Exception as e:
-        logging.error(f"Error in header prediction: {e}")
-        return {"model": "Header", "error": str(e)}
-
 # ============================================================
-# LLM EXPLANATION GENERATION (LLaMA)
-# ============================================================
-
-def generate_llama_explanation(predictions: List[Dict], ensemble_result: Dict) -> str:
-    """
-    Takes the LIME/SHAP explanations and final score, constructs a prompt,
-    and calls a LLaMA model to generate a human-readable explanation in Japanese.
-    """
-    # 1. Gather all analytical data from the predictions
-    lime_data = []
-    shap_html_data = []
-    shap_url_data = []
-
-    for p in predictions:
-        if p.get("model") == "BERT" and "lime_explanation" in p:
-            lime_data = p["lime_explanation"]
-        elif p.get("model") == "HTML" and "shap_explanation" in p:
-            shap_html_data = p["shap_explanation"]
-        elif p.get("model") == "URL" and "shap_explanation" in p:
-            shap_url_data = p["shap_explanation"]
-
-    final_prediction = ensemble_result.get("final_prediction", "Unknown")
-    threat_level = ensemble_result.get("threat_level", 0.0)
-
-    # 2. Construct the prompt for LLaMA
-    prompt = f"""
-    You are an expert cybersecurity analyst. Your task is to explain to a regular user why an email was classified as {final_prediction} (Threat Level: {threat_level * 100}%).
-    
-    Here is the analysis data from our AI models:
-    
-    1. Text Analysis (LIME Weights - Positive means phishing, Negative means safe):
-    {json.dumps(lime_data, indent=2)}
-    
-    2. HTML Structure Analysis (SHAP Values - Positive means phishing, Negative means safe):
-    {json.dumps(shap_html_data, indent=2)}
-    
-    3. URL Analysis (SHAP Values - Positive means phishing, Negative means safe):
-    {json.dumps(shap_url_data, indent=2)}
-    
-    Based on this data, write a brief, easy-to-understand explanation (around 3-4 sentences) of the main reasons for this classification. 
-    Do not show the raw numbers to the user, but use them to formulate your logic.
-    """
-
-    # 3. Call the Groq API (LLaMA 3.3)
-    try:
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-             }   
-            ],
-            model="llama-3.3-70b-versatile", 
-            max_tokens=300,  
-        )
-        return chat_completion.choices[0].message.content
-    except Exception as e:
-        logging.error(f"❌ Error communicating with Groq API: {e}")
-        return "Sorry, system is currently unable to generate a detailed explanation. (Communication error with the AI explanation server.)"
-
-# ============================================================
-# CONTEXT-AWARE ENSEMBLE SCORING (NO WHITELISTS)
+# CONTEXT-AWARE ENSEMBLE SCORING 
 # ============================================================
 
 def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = False) -> Dict:
@@ -436,13 +324,12 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
         'HTML': scores.get('HTML', {}).get('raw_risk', 0.0)
     }
     
-    base_weights = {'URL': 0.30, 'BERT': 0.50, 'HTML': 0.20}
+    base_weights = {'URL': 0.40, 'BERT': 0.40, 'HTML': 0.20}
     dynamic_weights = base_weights.copy()
 
     bert_muted = False
     marketing_email = False
 
-    # EXTRACT METRICS
     url_data = scores.get('URL', {})
     url_count = url_data.get('urls_analyzed', 0)
     unique_domains = url_data.get('unique_domains', 0)
@@ -456,55 +343,50 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
     if url_list:
         print(f"🔗 URLs Analyzed: {url_list}")
 
-    # 1️⃣ APPLY WEIGHT HEURISTICS FIRST
+    is_zero_payload = (url_count == 0 and html_tag_count < 10)
     
-    # HEURISTIC 1: The "Tracker Override"
+    if is_zero_payload:
+        print("🚩 HEURISTIC: Zero-Payload detected. Shifting weight to BERT.")
+        dynamic_weights = {'URL': 0.05, 'BERT': 0.90, 'HTML': 0.05}
+        if risks['BERT'] > 0.40:
+             dynamic_weights['BERT'] = 0.95
+
+    # HEURISTICS
     if risks['BERT'] < 0.25 and risks['URL'] > 0.60:
-        print("🛡️ HEURISTIC: Text is very safe. Muting URL risk (Likely Tracker behavior).")
         dynamic_weights['URL'] = dynamic_weights['URL'] * 0.2  
 
-    # HEURISTIC 3: The "Financial Newsletter" Override
     if risks['URL'] < 0.50 and risks['HTML'] < 0.60 and risks['BERT'] > 0.80:
-        print("🛡️ HEURISTIC: Safe Links + Clean HTML. Muting BERT's financial/marketing panic.")
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1 
         dynamic_weights['URL'] = dynamic_weights['URL'] * 1.5
         bert_muted = True
 
-    # HEURISTIC 4: Marketing Bloat (Apparel, platforms, etc.)
     if url_count >= 8 and html_tag_count > 50 and risks['URL'] < 0.60:
-        print(f"🛡️ HEURISTIC: High link volume ({url_count}) + Neutral URLs. Muting HTML/BERT panic.")
         dynamic_weights['HTML'] = dynamic_weights['HTML'] * 0.1 
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.1
         bert_muted = True
         marketing_email = True
 
-    # HEURISTIC 5: The "Policy Novel" (Long-form corporate/legal comms)
     if word_count > 300 and url_count <= 3 and risks['BERT'] > 0.60:
-        print("🛡️ HEURISTIC: Long-form text with few links. Muting BERT's policy/legal panic.")
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.5 
         bert_muted = True
 
-    # HEURISTIC 6: The "Enterprise Unsubscribe/API" Pattern
     url_str = url_list[0].lower() if url_list else ""
     enterprise_markers = ['/unsubscribe', '/api/', '/v1/', '/v2/', '/preferences', '/opt-out']
     is_enterprise_path = any(marker in url_str for marker in enterprise_markers)
 
     if url_count <= 2 and is_enterprise_path and risks['HTML'] < 0.25:
-        print("🛡️ HEURISTIC: Enterprise API/Unsubscribe path detected. Muting URL/BERT panic.")
         dynamic_weights['URL'] = dynamic_weights['URL'] * 0.2
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.2
         bert_muted = True
 
-    # 🧠 DYNAMIC HEURISTIC 7: The "Social Matrix" Risk Anchor
     if url_count >= 10 and unique_domains >= 5 and html_tag_count > 100:
-        print(f"🛡️ HEURISTIC: Social Matrix ({unique_domains} domains) detected. Anchoring URL risk.")
         risks['URL'] = min(risks['URL'], 0.20) 
         dynamic_weights['BERT'] = dynamic_weights['BERT'] * 0.05 
         dynamic_weights['HTML'] = dynamic_weights['HTML'] * 0.05 
         bert_muted = True
         marketing_email = True
 
-    # 2️⃣ CALCULATE THE MATH
+    # FINAL CALCULATION
     total_dynamic_weight = sum(dynamic_weights.values())
     final_risk = 0.0
     
@@ -514,16 +396,11 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
         final_risk += impact
         print(f"[{m}] Risk: {risks[m]:.4f} | Weight: {normalized_w:.4f} | Impact: {impact:.4f}")
 
-    # 3️⃣ APPLY POST-MATH PENALTIES (Spoofing)
     if is_spoofed and not marketing_email:
         if risks['BERT'] > 0.40 and not bert_muted:
-            print(f"🚩 SPOOF_FLAG: TRUE | BERT Suspicious -> Applying MAX 90% Penalty")
             final_risk = final_risk + (1.0 - final_risk) * 0.90 
         else:
-            print(f"⚠️ SPOOF_FLAG: TRUE | BERT Muted/Safe -> Applying MINOR 15% Tracker Penalty")
             final_risk = final_risk + (1.0 - final_risk) * 0.15
-    elif is_spoofed and marketing_email:
-        print("🛡️ SPOOF_FLAG: IGNORED | High-Volume Marketing Email Detected")
 
     print(f"RESULT_RISK: {final_risk:.4f}")
     print("---------------------------\n")
@@ -533,46 +410,121 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
 
     return {
         "total_score": round(float(display_confidence), 4),
-        "threat_level": round(float(final_risk), 4), # 🚀 ADD THIS LINE
+        "threat_level": round(float(final_risk), 4),
         "final_prediction": final_prediction,
-        "active_gate": "Ensemble" if not is_spoofed else "Spoof_Penalty",
+        "active_gate": "Zero-Payload-Heuristic" if is_zero_payload else "Ensemble",
         "raw_risk_data": {m: round(risks[m], 4) for m in models}
     }
 
 # ============================================================
-# API ENDPOINT
+# API ENDPOINTS
 # ============================================================
 
+# 1. The Fast Base Scan
 @app.post("/parse-and-predict")
-async def parse_and_predict_endpoint(raw_email: RawEmailInput, x_api_key: str = Header(None)):
+async def parse_and_predict_endpoint(
+    request: Request,                   # 🚀 Added Request
+    raw_email: RawEmailInput, 
+    x_api_key: str = Header(None)
+):
     if x_api_key != EXPECTED_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized internal request")
+    
+    parsed_email = parse_raw_email(raw_email.email_content)
+    if parsed_email["parsing_status"] == "error":
+        raise HTTPException(status_code=400, detail="Parsing failed")
+        
+    subject = parsed_email["header_details"].get("subject", "")
+    body_text = parsed_email["text"]
+    if not body_text and parsed_email["html"]:
+        body_text = BeautifulSoup(parsed_email["html"], "html.parser").get_text(separator=' ', strip=True)
+
+    combined_text = f"{subject} {body_text}".strip()
+    
+    predictions = []
+    # Fast scan - no XAI
+    if combined_text: predictions.append(predict_text_bert(combined_text))
+    if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"]))
+    if parsed_email["html"]: predictions.append(predict_html_features(parsed_email["html"]))
+    
+    total_result = calculate_total_phishing_score(predictions, parsed_email.get("is_spoofed", False))
+    return {"combined_analysis": total_result}
+
+# 2. The Deep XAI Analysis (THE SLOW ENDPOINT)
+@app.post("/explain-threat")
+async def explain_threat_endpoint(
+    request: Request,                   # 🚀 Added Request
+    raw_email: RawEmailInput, 
+    x_api_key: str = Header(None)
+):
+    if x_api_key != EXPECTED_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized internal request")
+    
+    parsed_email = parse_raw_email(raw_email.email_content)
+    if parsed_email["parsing_status"] == "error":
+        raise HTTPException(status_code=400, detail="Parsing failed")
+        
+    subject = parsed_email["header_details"].get("subject", "")
+    body_text = parsed_email["text"]
+    if not body_text and parsed_email["html"]:
+        body_text = BeautifulSoup(parsed_email["html"], "html.parser").get_text(separator=' ', strip=True)
+
+    combined_text = f"{subject} {body_text}".strip()
+    is_spoofed = parsed_email.get("is_spoofed", False)
+
+    # 🚀 DISCONNECTION CHECK 1: Before expensive LIME/SHAP
+    if await request.is_disconnected():
+        logging.info("🚀 Client disconnected before XAI logic. Skipping.")
+        return {"status": "cancelled"}
+
+    predictions = []
+    if combined_text: predictions.append(predict_text_bert(combined_text, run_xai=True))
+    if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"], run_xai=True))
+    if parsed_email["html"]: predictions.append(predict_html_features(parsed_email["html"], run_xai=True))
+    
+    # Grab top phishing words
+    bad_words = []
+    for p in predictions:
+        if p.get("model") == "BERT" and "lime_explanation" in p:
+            pos_words = [item for item in p["lime_explanation"] if item["weight"] > 0]
+            pos_words.sort(key=lambda x: x["weight"], reverse=True)
+            bad_words = [item["word"] for item in pos_words[:3]]
+
+    # 🚀 DISCONNECTION CHECK 2: Before expensive Groq Call
+    if await request.is_disconnected():
+        logging.info("🚀 Client disconnected before Groq call. Skipping.")
+        return {"status": "cancelled"}
+
+    prompt = f"""
+    You are a cybersecurity AI explaining a phishing alert to a non-technical user.
+    
+    EVIDENCE DETECTED:
+    - Link Spoofing: {is_spoofed}
+    - Suspicious Text Lures: {bad_words}
+    
+    FORMATTING & CONTENT RULES:
+    1. Output a STRICT bulleted list using '- '. Do not write an intro or outro paragraph. Maximum 3 bullets.
+    2. Analyze the EVIDENCE provided:
+       - If Link Spoofing is True, explain that a visible link is deceptively hiding its true destination. IF FALSE, DO NOT MENTION SPOOFING OR LINKS AT ALL.
+       - If Suspicious Text Lures are present, mentally filter out brand names and URL artifacts (like 'roblox', 'google', 'com', 'http'). Name the remaining words and identify the specific psychological tactic the attacker is using (e.g., creating false urgency, posing as an authority, offering a fake reward, or inducing fear).
+       - If neither Spoofing nor Text Lures are present, explain that the email's hidden code and structure matched known malicious patterns.
+    3. Actionable Advice: The final bullet point MUST start with "Advice: " and provide one sentence telling the user exactly what to do or check based on the specific threats found.
+    4. ZERO technical jargon. Do not mention SHAP, LIME, HTML, URLs, models, or weights.
+    """
+    
     try:
-        parsed_email = parse_raw_email(raw_email.email_content)
-        if parsed_email["parsing_status"] == "error":
-            raise HTTPException(status_code=400, detail="Parsing failed")
-        
-        predictions = []
-        subject = parsed_email["header_details"].get("subject", "")
-        body_text = parsed_email["text"]
-        
-        if not body_text and parsed_email["html"]:
-            body_text = BeautifulSoup(parsed_email["html"], "html.parser").get_text(separator=' ', strip=True)
-
-        combined_text = f"{subject} {body_text}".strip()
-        
-        # Add header prediction
-        predictions.append(predict_header_features(raw_email.email_content))
-        
-        if combined_text: predictions.append(predict_text_bert(combined_text))
-        if parsed_email["urls"]: predictions.append(predict_url_features(parsed_email["urls"]))
-        if parsed_email["html"]: predictions.append(predict_html_features(parsed_email["html"]))
-        
-        total_result = calculate_total_phishing_score(predictions, parsed_email.get("is_spoofed", False))
-        
-        llama_explanation = generate_llama_explanation(predictions, total_result)
-        total_result["human_readable_explanation"] = llama_explanation
-
-        return {"individual_predictions": predictions, "combined_analysis": total_result}
+        chat_completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}], 
+            model="llama-3.3-70b-versatile", 
+            max_tokens=300,
+            temperature=0.0
+        )
+        explanation = chat_completion.choices[0].message.content
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"❌ Error communicating with Groq API: {e}")
+        explanation = "- System unable to generate detailed explanation due to API error."
+    
+    return {
+        "human_readable_explanation": explanation,
+        "individual_predictions": predictions
+    }

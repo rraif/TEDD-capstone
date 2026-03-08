@@ -508,15 +508,19 @@ try {
 });
 
 app.post('/api/scan', requireGoogleAuth, async(req, res) => {
-const {emailId} = req.body;
-
-    // 1. Safety check (kept from your old code!)
+    const { emailId } = req.body;
     if (!emailId) return res.status(400).json({error: 'email ID required'});
 
-    try{
+    // 🚀 STEP 1: Link the frontend's cancellation to this backend request
+    const controller = new AbortController();
+    req.on('close', () => {
+        controller.abort(); // Kill the ML fetch if user clicks off or goes back
+    });
+
+    try {
         const gmail = getGmailClient(req.user);
         
-        // 2. Get RAW email (Changed from 'full' to 'raw' because the new model needs the whole MIME string)
+        // Fetch raw content
         const response = await gmail.users.messages.get({
             userId: 'me',
             id: emailId,
@@ -524,36 +528,202 @@ const {emailId} = req.body;
         }); 
 
         const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
-
-        // 3. Call new ensemble model (Kept your native fetch and environment variables!)
         const mlUrl = process.env.ML_SERVICE_URL;
 
+        // 🚀 STEP 2: Pass the signal to the Python fetch call
         const mlResponse = await fetch(`${mlUrl}/parse-and-predict`, {
-            method:'POST',
-            headers:{
+            method: 'POST',
+            headers: {
                 'Content-Type': 'application/json',
                 'x-api-key': process.env.INTERNAL_API_KEY
             },
-            body: JSON.stringify({email_content: rawEmailString})
+            body: JSON.stringify({ email_content: rawEmailString }),
+            signal: controller.signal // 👈 Propagate signal here
         });
 
-        if (!mlResponse.ok) {
-            throw new Error(`Python API returned status: ${mlResponse.status}`);
-        }
+        if (!mlResponse.ok) throw new Error(`Python API status: ${mlResponse.status}`);
 
         const mlResult = await mlResponse.json();
         const analysis = mlResult.combined_analysis;
 
-        // 4. Return exact format frontend expects, plus the new details for later
         res.json({
             id: emailId,
             verdict: analysis.final_prediction,
             confidence: analysis.total_score,
-            details: mlResult // Added for the Explainable AI box!
+            details: mlResult 
         });
     } catch (error) {
+        if (error.name === 'AbortError') return; // Silent exit on manual cancel
         console.error('Scan Error:', error.message);
         res.status(503).json({ error: "Scan Failed", details: error.message });
+    }
+});
+
+// --- 🚀 FINAL: GENAI TRAINING GENERATION ---
+app.post('/api/training/generate', requireGoogleAuth, async (req, res) => {
+    try {
+        const gmail = getGmailClient(req.user);
+        const googleId = req.user.google_id;
+
+        // 1. Fetch a pool of 30 recent emails for variety
+        const listResponse = await gmail.users.messages.list({ userId: 'me', maxResults: 30 });
+        const allMessages = listResponse.data.messages || [];
+        
+        // 2. Pick exactly ONE random message to prevent "Context Bleeding"
+        const randomMessages = allMessages.sort(() => 0.5 - Math.random()).slice(0, 1);
+        
+        const contextEmails = [];
+        for (const msg of randomMessages) {
+            try {
+                const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata' });
+                const headers = detail.data.payload.headers;
+                contextEmails.push({
+                    subject: headers.find(h => h.name === 'Subject')?.value || '',
+                    from_email: headers.find(h => h.name === 'From')?.value || ''
+                });
+            } catch (e) { 
+                console.error("Error fetching context msg", e); 
+            }
+        }
+
+        const isPhishingScenario = Math.random() > 0.5;
+        const genaiUrl = process.env.GENAI_SERVICE_URL || 'http://127.0.0.1:8001';
+        
+        const response = await fetch(`${genaiUrl}/gen/quiz-from-inbox`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.INTERNAL_API_KEY
+            },
+            body: JSON.stringify({ 
+                user_id: String(googleId),
+                messages: contextEmails,
+                quiz: {
+                    quiz_id: `training_${Date.now()}`,
+                    phishing_count: isPhishingScenario ? 1 : 0, 
+                    benign_count: isPhishingScenario ? 0 : 1,   
+                    language: "EN",
+                    tone: "formal"
+                }
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`GenAI service error: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        if (!data || data.length === 0) throw new Error("GenAI returned an empty list.");
+
+// 5. Format the result for the React frontend
+        const firstEmail = data[0]; 
+        
+        const cleanFromEmail = firstEmail.from_email.replace(/[<>]/g, '').trim();
+        const fullSender = `${firstEmail.from_name} <${cleanFromEmail}>`;
+
+        let cleanBody = firstEmail.body_text.replace(/\[\s*\{[\s\S]*?\}\s*\]/g, '');
+        
+        // 🚀 THE FIX: Aggressively catch real newlines AND escaped literal \n strings
+        let htmlBody = cleanBody.replace(/\\n/g, '<br>').replace(/\r?\n/g, '<br>');
+
+        if (firstEmail.links && firstEmail.links.length > 0) {
+            const linkObj = firstEmail.links[0];
+            const linkHtml = `<a href="${linkObj.url}" style="color: #3b82f6; text-decoration: underline; font-weight: bold;" target="_blank">${linkObj.display_text}</a>`;
+            const rawUrlRegex = /https:\/\/tedd\.training\/[a-zA-Z0-9\-\/_?=&]+/g;
+            
+            if (rawUrlRegex.test(htmlBody)) {
+                htmlBody = htmlBody.replace(rawUrlRegex, linkHtml);
+            } else {
+                htmlBody += `<br><br>${linkHtml}<br><br>`;
+            }
+        }
+
+        // Strip out the training footer if the AI hallucinated it
+        htmlBody = htmlBody.replace(/\(This is a training simulation email\.?\)/ig, '');
+
+        res.json({
+            isPhishing: firstEmail.category === 'phishing',
+            email: {
+                subject: firstEmail.subject,
+                from: fullSender,
+                body: htmlBody,
+                date: new Date().toISOString(),
+                // 🚀 NEW: Pass the AI's intended red flags to React for grading
+                redFlags: firstEmail.intended_red_flags || [] 
+            },
+            headers: firstEmail.headers || {}
+        });
+    } catch (error) {
+        console.error("Training Gen Error:", error);
+        res.status(500).json({ error: "Failed to generate training scenario" });
+    }
+});
+
+app.post('/api/users/score', requireGoogleAuth, async (req, res) => {
+    const { won, pointsToAward } = req.body;
+    const googleId = req.user.google_id;
+
+    try {
+        // Grab current stats
+        const userQuery = await db.query(
+            'SELECT user_score, survival_streak FROM users WHERE google_id = $1', 
+            [googleId]
+        );
+        
+        if (userQuery.rows.length === 0) return res.status(404).json({error: "User not found"});
+        
+        let currentScore = userQuery.rows[0].user_score || 0;
+        let currentStreak = userQuery.rows[0].survival_streak || 0;
+
+        // Calculate new stats
+        if (won) {
+            currentScore += (pointsToAward || 50);
+            currentStreak += 1;
+        } else {
+            currentStreak = 0; // Reset streak on failure!
+        }
+
+        // Update database
+        const updateQuery = await db.query(
+            'UPDATE users SET user_score = $1, survival_streak = $2 WHERE google_id = $3 RETURNING user_score, survival_streak',
+            [currentScore, currentStreak, googleId]
+        );
+
+        res.json({
+            success: true,
+            user_score: updateQuery.rows[0].user_score,
+            survival_streak: updateQuery.rows[0].survival_streak
+        });
+
+    } catch (err) {
+        console.error('Score update error:', err);
+        res.status(500).json({ error: "Failed to update score" });
+    }
+});
+
+app.post('/api/explain', requireGoogleAuth, async(req, res) => {
+    const {emailId} = req.body;
+    if (!emailId) return res.status(400).json({error: 'email ID required'});
+
+    try{
+        const gmail = getGmailClient(req.user);
+        const response = await gmail.users.messages.get({ userId: 'me', id: emailId, format: 'raw' }); 
+        const rawEmailString = Buffer.from(response.data.raw, 'base64url').toString('utf-8');
+
+        const mlResponse = await fetch(`${process.env.ML_SERVICE_URL}/explain-threat`, {
+            method:'POST',
+            headers:{ 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY },
+            body: JSON.stringify({email_content: rawEmailString})
+        });
+
+        if (!mlResponse.ok) throw new Error("Explain API failed");
+        
+        const mlResult = await mlResponse.json();
+        res.json(mlResult); // Sends back the LLaMA text and SHAP arrays
+    } catch (error) {
+        console.error('Explain Error:', error.message);
+        res.status(503).json({ error: "Explain Failed" });
     }
 });
 
