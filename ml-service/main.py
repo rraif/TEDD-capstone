@@ -156,6 +156,51 @@ def parse_raw_email(raw_email: str) -> Dict:
 # PREDICTION FUNCTIONS (Two-Stage Architecture)
 # ============================================================
 
+def predict_header_features(raw_email: str) -> Dict:
+    if not xgb_header_model: return {"model": "Header", "error": "Model not loaded"}
+    try:
+        feature_extractor = TeddFeatureExtractor()
+        features_dict = feature_extractor.extract(raw_email)
+        
+        # Convert to ordered list based on feature_extractor.feature_names
+        feature_values = [features_dict.get(name, 0.0) for name in feature_extractor.feature_names]
+        feature_array = np.array([feature_values])
+        
+        prediction = xgb_header_model.predict(feature_array)[0]
+        probabilities = xgb_header_model.predict_proba(feature_array)[0]
+        confidence = float(max(probabilities))
+        
+        result = "Phishing" if int(prediction) == 1 else "Legitimate"
+        raw_risk = confidence if result == "Phishing" else (1.0 - confidence)
+        
+        # ==========================================
+        # SHAP: Extract feature importance for LLaMA
+        # ==========================================
+        explainer = shap.TreeExplainer(xgb_header_model)
+        shap_values = explainer.shap_values(feature_array)
+        
+        if isinstance(shap_values, list):
+            instance_shap_values = shap_values[1][0]
+        else:
+            instance_shap_values = shap_values[0]
+
+        shap_explanation_data = [
+            {"feature": feat, "shap_value": float(val)} 
+            for feat, val in zip(feature_extractor.feature_names, instance_shap_values)
+        ]
+        shap_explanation_data.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+        
+        return {
+            "model": "Header",
+            "prediction": result,
+            "confidence": round(float(confidence), 4),
+            "raw_risk": float(raw_risk),
+            "shap_explanation": shap_explanation_data[:5]
+        }
+    except Exception as e:
+        logging.error(f"Error in header prediction: {e}")
+        return {"model": "Header", "error": str(e)}
+
 def predict_text_bert(text: str, run_xai: bool = False) -> Dict:
     if not bert_model: return {"model": "BERT", "error": "Model not loaded"}
     try:
@@ -317,14 +362,15 @@ def calculate_total_phishing_score(predictions: List[Dict], is_spoofed: bool = F
     scores = {p['model']: p for p in predictions if "error" not in p}
     if not scores: return {"total_score": 0.0, "final_prediction": "Unable to predict"}
 
-    models = ['URL', 'BERT', 'HTML']
+    models = ['Header', 'URL', 'BERT', 'HTML']
     risks = {
+        'Header': scores.get('Header', {}).get('raw_risk', 0.0),
         'URL': scores.get('URL', {}).get('raw_risk', 0.0), 
         'BERT': scores.get('BERT', {}).get('raw_risk', 0.5), 
         'HTML': scores.get('HTML', {}).get('raw_risk', 0.0)
     }
     
-    base_weights = {'URL': 0.40, 'BERT': 0.40, 'HTML': 0.20}
+    base_weights = {'Header': 0.20, 'URL': 0.30, 'BERT': 0.30, 'HTML': 0.20}
     dynamic_weights = base_weights.copy()
 
     bert_muted = False
