@@ -4,8 +4,12 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 from uuid import uuid4
 from typing import Dict, List, Tuple
+from dotenv import load_dotenv
 import re
 import random
+import os
+
+load_dotenv("../.env")
 
 from fastapi import APIRouter, HTTPException
 
@@ -18,7 +22,7 @@ from .prompts import build_email_prompt, PROMPT_VERSION
 from .llama_client import call_ollama
 from .guardrails import validate_and_parse_email
 
-MODEL_VERSION = "llama3.2:3b"
+MODEL_VERSION = os.environ.get("OLLAMA_MODEL")
 router = APIRouter()
 
 # ----------------------------

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from app.genai.router import router as genai_router
 
+
 # 🚀 1. Tell Python to go up one folder and read the root .env file
 load_dotenv("../.env")
 
@@ -23,4 +24,4 @@ if __name__ == "__main__":
     
     print(f"\n⚡ TEDD GenAI Service booting up on Port {target_port}...\n")
     
-    uvicorn.run("app.main:app", host="127.0.0.1", port=target_port, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=target_port, reload=True)

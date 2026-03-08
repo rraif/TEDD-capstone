@@ -11,6 +11,7 @@ export default function Training() {
   const [currentEmail, setCurrentEmail] = useState(null);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [showHeadersOnly, setShowHeadersOnly] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   
   // Checklist State
   const [selectedFlags, setSelectedFlags] = useState([]);

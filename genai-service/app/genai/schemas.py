@@ -88,3 +88,4 @@ class InboxQuizRequest(BaseModel):
     user_id: str
     messages: List[GmailMessageMeta]
     quiz: InboxQuizSettings
+    target_name: str = ""

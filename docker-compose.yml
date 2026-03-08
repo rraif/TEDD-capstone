@@ -9,6 +9,7 @@ services:
       - "${ML_PORT}"
     environment:
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
 
   # 2. The Node.js Backend
   server:
@@ -26,9 +27,11 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       ML_SERVICE_URL: ${ML_SERVICE_URL}
+      GENAI_SERVICE_URL: ${GENAI_SERVICE_URL}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
     depends_on:
       - ml-service
+      - genai-service
 
   # 3. The React Frontend
   client:
@@ -48,12 +51,17 @@ services:
 
   genai-service:
     build: ./genai-service
+    container_name: tedd-genai-service
     ports:
-      - "${GEN_AI_PORT}:${GEN_AI_PORT}" 
-    env_file:
-      - .env
-    volumes:
-      - ./genai-service:/app
+      - "${GEN_AI_PORT}:${GEN_AI_PORT}"
+    environment:
+      - GEN_AI_PORT=${GEN_AI_PORT}
+      - OLLAMA_URL=${OLLAMA_URL}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+    # Allows the container to talk to Ollama running on your host machine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
 
   # 4. Cloudflare Post-Quantum Tunnel
   cloudflared:
