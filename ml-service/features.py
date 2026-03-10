@@ -381,13 +381,31 @@ class TextFeatures:
 class TeddFeatureExtractor:
     def __init__(self):
         # The exact order of columns from your dataset
+# 🚀 FIX: Reverted to the 94 features expected by tedd_xgb_model.joblib
         self.feature_names = [
-            'hops', 'missing_received1', 'missing_received2', 'missing_received3', 'missing_received4', 'missing_received5', 'missing_received6', 'missing_received7', 'missing_received8', 'missing_received9', 'missing_received10', 'missing_received11', 'missing_received12', 'missing_received13', 'missing_received14', 'missing_received15', 'missing_received16',
-            'missing_subject', 'missing_date', 'missing_message-id', 'missing_from', 'missing_return-path', 'missing_to', 'missing_content-type', 'missing_mime-version', 'missing_x-mailer', 'missing_content-transfer-encoding', 'missing_x-mimeole', 'missing_x-priority', 'missing_list-id', 'missing_lines', 'missing_x-virus-scanned', 'missing_status', 'missing_content-length', 'missing_precedence', 'missing_delivered-to', 'missing_list-unsubscribe', 'missing_list-subscribe', 'missing_list-post', 'missing_list-help', 'missing_x-msmail-priority', 'missing_x-spam-status', 'missing_sender', 'missing_errors-to', 'missing_x-beenthere', 'missing_list-archive', 'missing_reply-to', 'missing_x-mailman-version', 'missing_x-miltered', 'missing_x-uuid', 'missing_x-virus-status', 'missing_x-spam-level', 'missing_x-spam-checker-version', 'missing_references', 'missing_in-reply-to', 'missing_user-agent', 'missing_thread-index', 'missing_cc', 'missing_received-spf', 'missing_x-original-to', 'missing_content-disposition', 'missing_mailing-list', 'missing_x-spam-check-by', 'missing_domainkey-signature', 'missing_importance', 'missing_x-mailing-list',
-            'content-encoding-val', 'received_str_forged', 'str_content-encoding_empty', 'str_from_question', 'str_from_exclam', 'str_from_chevron', 'str_to_chevron', 'str_to_undisclosed', 'str_to_empty', 'str_message-ID_dollar', 'str_return-path_bounce', 'str_return-path_empty', 'str_reply-to_question', 'str_received-SPF_bad', 'str_received-SPF_softfail', 'str_received-SPF_fail', 'str_content-type_texthtml', 'str_precedence_list',
-            'length_from', 'num_recipients_to', 'num_recipients_cc', 'num_recipients_from', 'number_replies', 'time_zone', 'x-priority', 'content-length', 'lines', 'day_of_week', 'date_comp_date_received', 'span_time',
-            'conseq_num_received_is_one', 'conseq_received_good', 'conseq_received_bad', 'conseq_received_unknown', 'conseq_received_date', 'email_match_from_reply-to', 'domain_val_message-id',
-            'domain_match_message-id_from', 'domain_match_from_return-path', 'domain_match_message-id_return-path', 'domain_match_message-id_sender', 'domain_match_message-id_reply-to', 'domain_match_return-path_reply-to', 'domain_match_reply-to_to', 'domain_match_to_in-reply-to', 'domain_match_errors-to_message-id', 'domain_match_errors-to_from', 'domain_match_errors-to_sender', 'domain_match_errors-to_reply-to', 'domain_match_sender_from', 'domain_match_references_reply-to', 'domain_match_references_in-reply-to', 'domain_match_references_to', 'domain_match_from_reply-to', 'domain_match_to_from', 'domain_match_to_message-id', 'domain_match_reply-to_received', 'domain_match_to_received', 'domain_match_return-path_received', 'domain_match_from_received'
+            'hops', 'missing_received1', 'missing_received2', 'missing_received3', 'missing_received4',
+            'missing_subject', 'missing_date', 'missing_message-id', 'missing_from', 'missing_return-path', 'missing_to', 
+            'missing_content-type', 'missing_mime-version', 'missing_x-mailer', 'missing_content-transfer-encoding', 
+            'missing_x-priority', 'missing_lines', 'missing_content-length', 'missing_precedence', 'missing_delivered-to', 
+            'missing_sender', 'missing_errors-to', 'missing_reply-to', 'missing_references', 'missing_in-reply-to', 
+            'missing_user-agent', 'missing_thread-index', 'missing_cc', 'missing_received-spf', 'missing_content-disposition', 
+            'missing_mailing-list', 'missing_domainkey-signature', 'importance', 'x-mailing-list',
+            'content-encoding-val', 'received_str_forged', 'str_content-encoding_empty', 'str_from_question', 
+            'str_from_exclam', 'str_from_chevron', 'str_to_chevron', 'str_to_undisclosed', 'str_to_empty', 
+            'str_message-ID_dollar', 'str_return-path_bounce', 'str_return-path_empty', 'str_reply-to_question', 
+            'str_received-SPF_bad', 'str_received-SPF_softfail', 'str_received-SPF_fail', 'str_content-type_texthtml', 
+            'str_precedence_list', 'length_from', 'num_recipients_to', 'num_recipients_cc', 'num_recipients_from', 
+            'number_replies', 'time_zone', 'x-priority', 'content-length', 'lines', 'day_of_week', 
+            'date_comp_date_received', 'span_time', 'conseq_num_received_is_one', 'conseq_received_good', 
+            'conseq_received_bad', 'conseq_received_unknown', 'conseq_received_date', 'email_match_from_reply-to', 
+            'domain_val_message-id', 'domain_match_message-id_from', 'domain_match_from_return-path', 
+            'domain_match_message-id_return-path', 'domain_match_message-id_sender', 'domain_match_message-id_reply-to', 
+            'domain_match_return-path_reply-to', 'domain_match_reply-to_to', 'domain_match_to_in-reply-to', 
+            'domain_match_errors-to_message-id', 'domain_match_errors-to_from', 'domain_match_errors-to_sender', 
+            'domain_match_errors-to_reply-to', 'domain_match_sender_from', 'domain_match_references_reply-to', 
+            'domain_match_references_in-reply-to', 'domain_match_references_to', 'domain_match_from_reply-to', 
+            'domain_match_to_from', 'domain_match_to_message-id', 'domain_match_reply-to_received', 
+            'domain_match_to_received', 'domain_match_return-path_received', 'domain_match_from_received'
         ]
 
     def _get_domains(self, header_str):
@@ -535,4 +553,6 @@ class TeddFeatureExtractor:
         # Conseq logic fallback (Uses regex for speed over full parser in single-instance)
         features['conseq_num_received_is_one'] = 1 if raw_hops == 1 else 0
         features['conseq_received_good'] = 1 if raw_hops > 1 else 0
+
+        return features
 
